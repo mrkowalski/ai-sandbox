@@ -3,36 +3,9 @@
 # entrypoint.sh - install the sandbox's egress firewall, then hand off to the
 # container's command. Declared as the image ENTRYPOINT.
 #
-# This is the sandbox's enforcement point, and it is anchored to the *container*
-# rather than to the tool that launches it. It therefore runs on every start:
-# `devcontainer up`, `docker start`, a Docker Desktop restart button, an
-# automatic restart after a host reboot. devcontainer.json's postStartCommand
-# covers only the first of those - and iptables rules and ipsets live in the
-# container's network namespace, which is new on every start, so a restarted
-# container used to come back with an empty ruleset and nothing to notice.
-#
-# It fails closed by never reaching `exec`: if the firewall does not install, or
-# does not verify, this script exits and the container stops. That leaves no
-# unprotected container running for `devcontainer exec` to attach to, which is
-# the point - a launch command that merely returns non-zero does not stop
-# anyone from attaching a moment later.
-#
-# The gate is `verify.sh --iptables-only`, which asserts local ruleset state and
-# opens no sockets. The full verify.sh - which probes api.anthropic.com and the
-# other whitelisted endpoints - stays in postStartCommand, because reachability
-# is a health signal, not a containment property. A third party's outage should
-# report NOT VERIFIED; it should not stop the sandbox from starting.
-#
-# Runs as the unprivileged `node` user and reaches root only through the two
-# NOPASSWD sudoers entries the Dockerfile already grants (init-firewall.sh and
-# verify.sh). It adds no privilege.
-#
 # Escape hatch, for the host operator only: `docker run --entrypoint /bin/bash`
 # (or `--entrypoint ""`) starts the image with none of this, which is how a
-# container that refuses to start is diagnosed. Deliberately not an in-image
-# env-var bypass: that would be a permanent, documented way to run the sandbox
-# unprotected, and the agent in here has no container engine to use the
-# --entrypoint override with.
+# container that refuses to start is diagnosed.
 
 set -euo pipefail
 

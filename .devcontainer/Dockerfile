@@ -41,7 +41,7 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
 
-# Create workspace and config directories and set permissions
+# /workspace gets overriden by the devcontainer
 RUN mkdir -p /workspace /home/node/.claude && \
   chown -R node:node /workspace /home/node/.claude
 
@@ -64,6 +64,7 @@ ENV DISABLE_AUTOUPDATER=1
 ENV OPENSPEC_TELEMETRY=0
 
 RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
+RUN npm install -g @agentclientprotocol/claude-agent-acp
 RUN npm install -g @fission-ai/openspec@latest
 
 COPY init-firewall.sh /usr/local/bin/
