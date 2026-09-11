@@ -55,11 +55,9 @@ docker run --rm -it --entrypoint /bin/bash <image>   # no firewall installed
 
 ## Commands that must run outside the sandbox
 
-Some commands cannot work in here no matter what: they authenticate against, or
-act on, an account whose credentials live in your home directory on the host,
-over an API the firewall does not allow. `npx wrangler login` is the archetype
-- and running it on the host does not help the container either, because the
-credentials it writes stay on the host.
+Some commands cannot work in the sandbox: they authenticate against, or
+act on, an account whose credentials live on the host, or over an API the firewall does not allow. 
+`npx wrangler login` is the example. Credentials do not propagate into the sandbox.
 
 `.devcontainer/host-only-commands.txt` is the list of those commands. When
 Claude Code hits one it says so and hands you the exact command to run in your
