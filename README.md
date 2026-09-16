@@ -10,7 +10,7 @@ It is a headless sandbox; it contains no human-facing features. It restricts wha
 
 ### Crucially, it:
 
-- does not allow `git push`
+- cannot modify the project's git repository: `.git` is bind-mounted read-only. Reading is untouched. `git push` is impossible on its own account too: there is no SSH key, no credential helper, and no egress
 - mounts the container fs as readonly except for volumes and tmps
 - disables outbound network traffic for everything except for entries in `.devcontainer/allowed-domains.txt`
 

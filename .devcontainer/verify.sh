@@ -6,7 +6,8 @@
 # doing its job:
 #
 #   1. example.com is unreachable over both HTTP and HTTPS
-#   2. `git push` is impossible over SSH and over HTTPS (no credentials)
+#   2. `git push` is impossible over SSH and over HTTPS, and there is no SSH
+#      key, forwarded agent, or credential helper to attempt it with
 #   3. The Anthropic endpoints Claude Code needs are reachable
 #   4. iptables is in whitelist mode (OUTPUT policy is DROP)
 #   5. Firewall installation was anchored to this container start, so a
@@ -23,6 +24,12 @@
 #
 #   8. The host-only command list is installed, and the guard that enforces
 #      it blocks a declared command and passes an ordinary one
+#
+# and that the mounted project's git history is the host's to write, not the
+# agent's:
+#
+#   9. The workspace's git directory is read-only while the repository stays
+#      readable
 #
 # Prints "VERIFIED" and exits 0 when every required check passes, otherwise
 # prints a summary of the failures and exits 1.
@@ -341,14 +348,30 @@ fi
 [ -n "$SSH_PUSH_URL" ]   || SSH_PUSH_URL="git@github.com:anthropics/claude-code.git"
 [ -n "$HTTPS_PUSH_URL" ] || HTTPS_PUSH_URL="https://github.com/anthropics/claude-code.git"
 
-# Report the credential material that is visible, so a failure is attributable.
-SSH_KEYS=$(ls -1 "$HOME"/.ssh/id_* 2>/dev/null | grep -cv '\.pub$')
-if [ "${SSH_KEYS:-0}" -gt 0 ]; then
-  warn "$SSH_KEYS SSH private key(s) present in \$HOME/.ssh"
-elif [ -n "${SSH_AUTH_SOCK:-}" ]; then
-  warn "SSH_AUTH_SOCK is set ($SSH_AUTH_SOCK) - an agent may forward keys in"
+# There must be nothing to push *with*, before the network is even considered.
+# This is a FAIL rather than a WARN: "no key in here" is a guarantee the sandbox
+# makes, not an observation about it, so a key appearing has to stop the launch.
+#
+# `find` rather than globbing `id_*`: a key does not have to be called id_rsa,
+# and a deploy key or a .pem would sail past a name-based glob. Everything that
+# is not a public key, a known_hosts, or the ssh config is treated as key
+# material. The agent socket is checked independently, not as an elif - a
+# forwarded agent reaches the host's keys whether or not files are present here.
+SSH_KEY_FILES=$(find "$HOME/.ssh" -maxdepth 1 -type f \
+                  ! -name '*.pub' ! -name 'known_hosts*' ! -name 'config' \
+                  2>/dev/null | head -n 5)
+if [ -n "$SSH_KEY_FILES" ]; then
+  bad "SSH key material is present in $HOME/.ssh"
+  while IFS= read -r k; do info "$k"; done <<<"$SSH_KEY_FILES"
 else
-  ok "no SSH private keys in \$HOME/.ssh and no ssh-agent socket"
+  ok "no SSH key material in \$HOME/.ssh"
+fi
+
+if [ -n "${SSH_AUTH_SOCK:-}" ] && [ -S "${SSH_AUTH_SOCK:-}" ]; then
+  bad "an SSH agent is forwarded into the sandbox: $SSH_AUTH_SOCK"
+  info "the host's keys are reachable from in here"
+else
+  ok "no SSH agent is forwarded into the sandbox"
 fi
 
 CRED_HELPER=$(git config --get credential.helper 2>/dev/null || true)
@@ -604,11 +627,17 @@ check_ro_dir "$HOME" "\$HOME (the named volumes mount inside it)"
 # Check 8: host-only commands are declared and enforced
 # ---------------------------------------------------------------------------
 #
-# Unlike the checks above, this one is about what the *agent* can do rather
-# than what the network allows. It is not a containment guarantee - a host-only
-# command is already blocked at the network layer - so it is checked here for
-# the same reason everything else is: a capability the container claims should
-# be asserted at every start rather than documented and hoped for.
+# Unlike the checks above, this one is about what the agent is *told* rather
+# than what it is prevented from doing, and it is not a containment guarantee.
+# Nothing in the list depends on the guard to be enforced: the wrangler, gh and
+# `git push` entries are held by the firewall and by credentials the sandbox
+# does not have, and the rest of the git entries by the read-only .git mount
+# asserted in check 9. The guard only decides whether the agent meets a clear
+# handoff or an opaque failure.
+#
+# It is checked here for the same reason everything else is: a capability the
+# container claims should be asserted at every start rather than documented and
+# hoped for.
 #
 # Every failure below is `bad`, so a broken guard blocks the launch. That is
 # deliberate: a guard that silently stops matching would put the agent back to
@@ -622,14 +651,31 @@ HOST_ONLY_GUARD=/usr/local/bin/host-only-guard.sh
 HOST_ONLY_SETTINGS=/etc/claude-code/managed-settings.json
 HOST_ONLY_POLICY=/etc/claude-code/CLAUDE.md
 
-# A command the shipped list is expected to declare host-only. This is the only
-# thing verify.sh knows about the list's *contents*; if the wrangler entries are
-# ever dropped, point this at something the new list does declare.
-HOST_ONLY_SAMPLE='npx wrangler login'
+# The commands the shipped list is expected to declare host-only - one per
+# family, so dropping a whole family from the list fails the launch instead of
+# passing unnoticed. Together with HOST_ONLY_ALLOWED below, this is the only
+# thing verify.sh knows about the list's *contents*; if a family is ever
+# dropped on purpose, drop its sample here too rather than leave a standing
+# FAIL.
+HOST_ONLY_SAMPLES=(
+  'npx wrangler login'   # firewall + absent credentials
+  'git commit -m x'      # read-only .git mount
+  'git add .'            # read-only .git mount (staging)
+  'gh pr create'         # firewall + absent credentials
+)
 
-# An ordinary command that must never be blocked. Over-blocking is as much a
-# failure as under-blocking: it would leave the agent unable to work.
+# Commands that must never be blocked. Over-blocking is as much a failure as
+# under-blocking: it would leave the agent unable to work. `git tag -l` is the
+# sharp edge - the list declares tag's *mutating* forms only, so a pattern
+# tightened by mistake would take a read command away in silence. `git status`
+# holds the same line for the git entries as a whole. HOST_ONLY_ORDINARY is
+# named separately because the fails-closed probe below reuses it.
 HOST_ONLY_ORDINARY='ls -la'
+HOST_ONLY_ALLOWED=(
+  "$HOST_ONLY_ORDINARY"
+  'git status'
+  'git tag -l'
+)
 
 # guard_probe <command> [list-path] -> sets GUARD_RC and GUARD_OUT
 # Feeds the guard a synthetic PreToolUse payload, exactly as Claude Code would.
@@ -678,24 +724,30 @@ if [ "$HOST_ONLY_OK" -eq 1 ]; then
     while IFS= read -r l; do info "${l#host-only-guard: }"; done <<<"$PARSE_OUT"
   fi
 
-  # Exercise the guard rather than trusting its configuration: a listed command
-  # must be blocked, and an ordinary one must not.
-  guard_probe "$HOST_ONLY_SAMPLE"
-  if [ "$GUARD_RC" -eq 2 ]; then
-    ok "guard blocks a declared host-only command ('$HOST_ONLY_SAMPLE')"
-  else
-    bad "guard did NOT block '$HOST_ONLY_SAMPLE' (exit $GUARD_RC)"
-    info "either the guard is broken, or the list no longer declares it -"
-    info "update HOST_ONLY_SAMPLE in this script if the list changed on purpose"
-  fi
+  # Exercise the guard rather than trusting its configuration: every family the
+  # list is relied on to declare must be blocked, and the commands it is relied
+  # on NOT to declare must pass.
+  for cmd in "${HOST_ONLY_SAMPLES[@]}"; do
+    guard_probe "$cmd"
+    if [ "$GUARD_RC" -eq 2 ]; then
+      ok "guard blocks a declared host-only command ('$cmd')"
+    else
+      bad "guard did NOT block '$cmd' (exit $GUARD_RC)"
+      info "either the guard is broken, or the list no longer declares this"
+      info "family - update HOST_ONLY_SAMPLES here if that was on purpose"
+    fi
+  done
 
-  guard_probe "$HOST_ONLY_ORDINARY"
-  if [ "$GUARD_RC" -eq 0 ] && [ -z "$GUARD_OUT" ]; then
-    ok "guard passes an ordinary command through silently ('$HOST_ONLY_ORDINARY')"
-  else
-    bad "guard interfered with '$HOST_ONLY_ORDINARY' (exit $GUARD_RC)"
-    [ -n "$GUARD_OUT" ] && info "$(head -n 1 <<<"$GUARD_OUT")"
-  fi
+  for cmd in "${HOST_ONLY_ALLOWED[@]}"; do
+    guard_probe "$cmd"
+    if [ "$GUARD_RC" -eq 0 ] && [ -z "$GUARD_OUT" ]; then
+      ok "guard passes an ordinary command through silently ('$cmd')"
+    else
+      bad "guard interfered with '$cmd' (exit $GUARD_RC)"
+      info "an over-broad pattern in the list takes a working command away"
+      [ -n "$GUARD_OUT" ] && info "$(head -n 1 <<<"$GUARD_OUT")"
+    fi
+  done
 
   # The two probes above depend on the shipped list's contents. Repeat them
   # against a list written here, so a guard whose matching has stopped working
@@ -728,6 +780,83 @@ if [ "$HOST_ONLY_OK" -eq 1 ]; then
 else
   info "skipping the behavioural probes - the guard is not installed correctly"
 fi
+
+# ---------------------------------------------------------------------------
+# Check 9: the mounted repository cannot be written
+# ---------------------------------------------------------------------------
+#
+# This is the boundary that check 8's git entries only describe. devcontainer.json
+# binds the workspace's .git directory in read-only, so a write has to fail in
+# the kernel - whether or not the guard ran, whether the command came through
+# the Bash tool, and whether the guard's bypass was used.
+#
+# Both directions are asserted. An unreadable repository is as broken as a
+# writable one, just in the other direction: the agent has to be able to show
+# the user what it changed, and every read it needs (status, log, branch) must
+# still work.
+#
+# The probe targets the *resolved* git directory from `rev-parse
+# --absolute-git-dir`, not the literal .git path. In a worktree or a submodule
+# .git is a file pointing elsewhere; mounting that file read-only leaves the
+# real git directory writable, and resolving it is what makes that show up as a
+# FAIL instead of a false pass.
+#
+# A workspace that is not a repository reports N/A rather than passing: a
+# silent pass is indistinguishable from a protection that quietly stopped
+# working. Credentials - SSH keys, a forwarded agent, the git credential helper
+# - all belong to check 2 and are asserted there, not repeated here.
+
+section "Mounted repository must be read-only"
+
+# No cwd fallback here, deliberately: `git rev-parse` from wherever the script
+# happens to be standing can resolve a *different* repository than the mounted
+# one, which would silently turn "this workspace is not a repository" into a
+# probe of some other repo. Resolve the workspace or report N/A.
+GIT_TOPLEVEL=$(git -C "${WORKSPACE_DIR:-$PWD}" rev-parse --show-toplevel 2>/dev/null || true)
+
+if [ -z "$GIT_TOPLEVEL" ]; then
+  info "the mounted workspace is not a git repository"
+  info "write protection does not apply here - not a pass, not a failure"
+else
+  GIT_DIR_ABS=$(git -C "$GIT_TOPLEVEL" rev-parse --absolute-git-dir 2>/dev/null || true)
+
+  if [ -z "$GIT_DIR_ABS" ] || [ ! -d "$GIT_DIR_ABS" ]; then
+    bad "could not resolve the git directory for $GIT_TOPLEVEL"
+  else
+    # `: >` rather than `touch`: touch on an existing path only updates mtime,
+    # which succeeds on some read-only setups. Creating a new file does not.
+    GIT_WRITE_PROBE="$GIT_DIR_ABS/.sandbox-write-probe"
+    if : 2>/dev/null > "$GIT_WRITE_PROBE"; then
+      rm -f "$GIT_WRITE_PROBE" 2>/dev/null || true
+      bad "the workspace git directory is WRITABLE: $GIT_DIR_ABS"
+      info "the agent can commit to, and rewrite, the user's repository"
+      info "devcontainer.json must bind this path read-only; see check 8's list"
+      [ "$GIT_DIR_ABS" = "$GIT_TOPLEVEL/.git" ] \
+        || info "note: this is a worktree or submodule - .git is a file, and the"
+      [ "$GIT_DIR_ABS" = "$GIT_TOPLEVEL/.git" ] \
+        || info "real git directory it points at is outside the mount"
+    else
+      ok "the workspace git directory is read-only ($GIT_DIR_ABS)"
+    fi
+
+    # The other direction: reads must be untouched.
+    GIT_READ_OK=1
+    git -C "$GIT_TOPLEVEL" status --porcelain >/dev/null 2>&1 || GIT_READ_OK=0
+    git -C "$GIT_TOPLEVEL" branch --list    >/dev/null 2>&1 || GIT_READ_OK=0
+    # `log` only where there is a commit to log; a fresh repo has no HEAD.
+    if git -C "$GIT_TOPLEVEL" rev-parse -q --verify HEAD >/dev/null 2>&1; then
+      git -C "$GIT_TOPLEVEL" log -1 --oneline >/dev/null 2>&1 || GIT_READ_OK=0
+    fi
+
+    if [ "$GIT_READ_OK" -eq 1 ]; then
+      ok "the repository is still readable (status, branch, log all succeed)"
+    else
+      bad "the repository cannot be read - the write protection is too broad"
+      info "the agent cannot show the user what it changed"
+    fi
+  fi
+fi
+
 
 # ---------------------------------------------------------------------------
 # Summary

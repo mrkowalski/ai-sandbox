@@ -1,6 +1,6 @@
 ## Purpose
 
-Declares which commands cannot work inside the sandbox because they depend on credentials or endpoints that exist only on the host, stops the agent from attempting them, and turns each attempt into a clear handoff telling the user exactly what to run outside the sandbox.
+Declares which commands the sandbox refuses to run — because they depend on credentials or endpoints that exist only on the host, or because the mounted repository is read-only — stops the agent from attempting them, and turns each attempt into a clear handoff telling the user exactly what to run outside the sandbox.
 
 ## Requirements
 
@@ -12,7 +12,7 @@ Each entry SHALL carry both a pattern that identifies the command and human-read
 
 Extending the sandbox's knowledge of a host-only command SHALL require only adding a line to this list and rebuilding the container.
 
-The list SHALL initially declare only the `wrangler` subcommands that authenticate against, or act on, a Cloudflare account. `wrangler` subcommands that operate purely on local files SHALL NOT be declared host-only.
+The list SHALL declare the `wrangler` subcommands that authenticate against, or act on, a Cloudflare account; the git commands that write or publish history; and the `gh` subcommands that authenticate against, or act on, a GitHub account. Subcommands of a listed tool that only read local state SHALL NOT be declared host-only.
 
 #### Scenario: Adding a new host-only command
 
@@ -27,8 +27,63 @@ The list SHALL initially declare only the `wrangler` subcommands that authentica
 
 #### Scenario: A local-only subcommand of a listed tool
 
-- **WHEN** the agent runs a `wrangler` subcommand that neither authenticates nor contacts a Cloudflare endpoint
+- **WHEN** the agent runs a subcommand of a listed tool that neither authenticates, nor contacts a remote endpoint, nor writes the repository — such as `wrangler dev`, `git diff`, or `git log`
 - **THEN** the command runs normally and is not treated as host-only
+
+### Requirement: Git and GitHub account operations are declared host-only
+
+The list SHALL declare host-only every command that writes the mounted repository — recording a commit, rewriting history, publishing it, or staging toward it — and every `gh` subcommand that authenticates against or acts on a GitHub account.
+
+At minimum this SHALL cover `git push`, `git commit`, `git merge`, `git rebase`, `git cherry-pick`, `git revert`, `git am`, the mutating forms of `git tag`, and the staging commands `git add`, `git stash`, `git rm`, and `git mv`, including their invocations that carry global options such as `-C <dir>`.
+
+Git commands that only read the repository — reporting status, showing differences, reading the log, showing a commit, listing branches, listing tags — SHALL NOT be declared host-only, so the agent can still show the user exactly what it changed.
+
+These declarations SHALL be understood as the sandbox explaining a refusal, not as the mechanism producing it: the mounted repository's write protection is specified in `git-write-protection` and holds independently of this list.
+
+#### Scenario: The agent tries to commit its work
+
+- **WHEN** the agent attempts `git commit` in the mounted workspace
+- **THEN** no commit is created
+- **AND** the agent is told the step must be run in a terminal outside the sandbox, and what to run there
+
+#### Scenario: A history-writing command other than commit
+
+- **WHEN** the agent attempts a command that would create a commit without invoking `git commit` — a merge, rebase, cherry-pick, revert, or `git am`
+- **THEN** it is blocked in the same way, so the declaration cannot be stepped around by choosing a different command
+
+#### Scenario: Git with a global option before the subcommand
+
+- **WHEN** the agent invokes a declared git subcommand with global options in front of it, such as `git -C some/dir commit`
+- **THEN** it is still recognised and blocked
+
+#### Scenario: A staging command that would otherwise fail obscurely
+
+- **WHEN** the agent attempts `git add` or `git stash` in the mounted workspace
+- **THEN** it receives the list's explanation rather than an unexplained permission error from the filesystem
+
+#### Scenario: Showing the user what changed
+
+- **WHEN** the agent diffs the working tree and reads the log to summarise its work
+- **THEN** both run normally
+
+### Requirement: Each entry states accurately why its command is refused
+
+An entry's explanation SHALL give the actual reason the command is refused. Where a command is refused for more than one reason — because it cannot work here *and* because the sandbox declines it — the explanation SHALL be true of every command the entry matches.
+
+An entry SHALL NOT attribute a refusal to missing credentials or a blocked endpoint when that is not what prevents the command, and SHALL NOT describe a refused command as broken or as having failed.
+
+The list SHALL record, for each group of entries, which mechanism actually enforces it, so that a later reader can tell an entry backed by containment from one the command filter alone would refuse.
+
+#### Scenario: A command that would otherwise succeed
+
+- **WHEN** the agent is stopped attempting a command that no credential or network restriction would have prevented
+- **THEN** the explanation it relays gives the real reason
+- **AND** does not claim the command failed or that a credential was missing
+
+#### Scenario: A reader auditing the list
+
+- **WHEN** a reader consults the list to determine what actually stops a declared command
+- **THEN** each group of entries names the mechanism that enforces it
 
 ### Requirement: A declared host-only command is never executed inside the sandbox
 
@@ -66,6 +121,8 @@ The instructions in effect for every session SHALL direct the agent to consult t
 
 That statement SHALL name the sandbox restriction as the reason, and SHALL quote the exact command the user needs to run on the host. The agent SHALL NOT present the situation as a failure, a bug, or something to retry, and SHALL NOT substitute a workaround that attempts the same effect by other means without saying it is doing so.
 
+The instructions SHALL further direct the agent not to offer to run a declared command, nor to ask the user for permission to run one. Where the agent would ordinarily propose such a step, it SHALL instead describe the operation it recommends and state that it cannot be performed inside the sandbox.
+
 When the agent nevertheless attempts a listed command and is stopped, it SHALL relay the returned explanation and host-side remedy to the user rather than retrying, rewording, or working around the command.
 
 #### Scenario: Host-only step reached during a task
@@ -73,6 +130,12 @@ When the agent nevertheless attempts a listed command and is stopped, it SHALL r
 - **WHEN** completing the user's task requires a declared host-only command
 - **THEN** the agent states that this step must be run outside the sandbox, quotes the command verbatim, and gives the sandbox restriction as the reason
 - **AND** the agent does not attempt the command
+
+#### Scenario: The agent would otherwise propose the command
+
+- **WHEN** the agent finishes work that would ordinarily end in a declared command, such as a commit
+- **THEN** it recommends the operation and states plainly that it is not possible inside the sandbox
+- **AND** it does not offer to run it or ask to be allowed to
 
 #### Scenario: The agent is stopped mid-attempt
 
@@ -84,7 +147,6 @@ When the agent nevertheless attempts a listed command and is stopped, it SHALL r
 
 - **WHEN** a task contains both host-only steps and steps the sandbox can perform
 - **THEN** the agent completes the steps it can and states plainly which steps were left for the user to run on the host
-
 ### Requirement: The declaration applies to every project mounted in the sandbox
 
 The list, the enforcement, and the session instructions SHALL take effect in every sandbox session regardless of which host project is mounted as the workspace, and SHALL NOT require any per-project configuration.
@@ -124,6 +186,8 @@ The sandbox's start-time verification SHALL assert that this capability is actua
 
 Verification SHALL additionally exercise the enforcement rather than only inspecting its configuration: it SHALL confirm that a command known to be on the list is blocked and that an ordinary command is not.
 
+The commands it exercises SHALL include at least one from each family the list is relied upon to declare, so that dropping a whole family from the list fails the launch instead of passing unnoticed.
+
 #### Scenario: Enforcement is not installed
 
 - **WHEN** the enforcement mechanism, the list, or the session instructions are missing at container start
@@ -132,6 +196,11 @@ Verification SHALL additionally exercise the enforcement rather than only inspec
 #### Scenario: Enforcement is installed but ineffective
 
 - **WHEN** the enforcement mechanism is present but does not block a command known to be on the list
+- **THEN** verification reports the failure and the launch fails
+
+#### Scenario: A declared family is dropped from the list
+
+- **WHEN** the entries covering git history commands are removed from the list
 - **THEN** verification reports the failure and the launch fails
 
 #### Scenario: Enforcement over-blocks
@@ -143,3 +212,4 @@ Verification SHALL additionally exercise the enforcement rather than only inspec
 
 - **WHEN** the list, the enforcement, and the session instructions are all installed and behave correctly
 - **THEN** verification passes this section and the launch proceeds
+

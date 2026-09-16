@@ -13,10 +13,12 @@
     "--tmpfs=/tmp"
   ],
   "remoteUser": "node",
+  "initializeCommand": "mkdir -p '${localWorkspaceFolder}/.git'",
   "mounts": [
     "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
     "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=claude-code-npm-${devcontainerId},target=/home/node/.npm,type=volume"
+    "source=claude-code-npm-${devcontainerId},target=/home/node/.npm,type=volume",
+    "source=${localWorkspaceFolder}/.git,target=${localWorkspaceFolder}/.git,type=bind,readonly"
   ],
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
