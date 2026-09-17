@@ -10,7 +10,7 @@ It is a headless sandbox; it contains no human-facing features. It restricts wha
 
 ### Crucially, it:
 
-- cannot modify the project's git repository: `.git` is bind-mounted read-only. Reading is untouched. `git push` is impossible on its own account too: there is no SSH key, no credential helper, and no egress
+- cannot modify the project's git repository: `.git` is bind-mounted read-only. `git push` is impossible too: there is no SSH key, no credential helper, and no egress
 - mounts the container fs as readonly except for volumes and tmps
 - disables outbound network traffic for everything except for entries in `.devcontainer/allowed-domains.txt`
 
@@ -40,14 +40,7 @@ sbx-resume(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude
 
 ## The firewall
 
-The firewall is installed by the image entrypoint. 
-It fails closed. If the firewall cannot be installed - most often a hostname in
-`allowed-domains.txt` that will not resolve - the container stops instead of
-starting, and `docker logs` says why.
-
-A container that refuses to start is the sandbox declining to run unprotected,
-not a fault. Fix the whitelist and start it again. If you need a shell inside
-an image whose container will not start, bypass the entrypoint from the host:
+The firewall is installed by the image entrypoint. If the firewall cannot be installed - most often a hostname in `allowed-domains.txt` that will not resolve - the container stops instead of starting, and `docker logs` says why. If you need a shell inside an image whose container will not start, bypass the entrypoint from the host:
 
 ```bash
 docker run --rm -it --entrypoint /bin/bash <image>   # no firewall installed
@@ -55,14 +48,9 @@ docker run --rm -it --entrypoint /bin/bash <image>   # no firewall installed
 
 ## Commands that must run outside the sandbox
 
-Some commands cannot work in the sandbox: they authenticate against, or
-act on, an account whose credentials live on the host, or over an API the firewall does not allow. 
-`npx wrangler login` is the example. Credentials do not propagate into the sandbox.
+Some commands cannot work in the sandbox: they authenticate against, or act on, an account whose credentials live on the host, or over an API the firewall does not allow. `npx wrangler login` is the example. Credentials do not propagate into the sandbox.
 
-`.devcontainer/host-only-commands.txt` is the list of those commands. When
-Claude Code hits one it says so and hands you the exact command to run in your
-own terminal, instead of running it, failing, and guessing. If it tries anyway,
-a guard blocks the command before it executes and gives it the same message.
+`.devcontainer/host-only-commands.txt` is the list of those commands. When Claude Code hits one it says so and hands the exact command to run in a terminal, instead of trying to run it. If it tries anyway, a guard blocks the command before it executes and gives it the same message.
 
 To add one, add a line to that file and rebuild:
 
@@ -70,13 +58,9 @@ To add one, add a line to that file and rebuild:
 <pattern>  ::  <what the user should be told>
 ```
 
-`<pattern>` is a POSIX ERE matched against the start of each command in the
-line the agent submitted, after `npx`-style runners are stripped - so a pattern
-reading `wrangler ... deploy` also catches `cd app && npx wrangler deploy`. The
-file's header documents the format and the normalization in full.
+`<pattern>` is a POSIX ERE matched against the start of each command in the line the agent submitted, after `npx`-style runners are stripped - so a pattern reading `wrangler ... deploy` also catches `cd app && npx wrangler deploy`. The file's header documents the format and the normalization in full.
 
-If a pattern turns out to be too broad, you do not need a rebuild to get past
-it - prefix the command with the bypass, which applies to that one invocation:
+If a pattern turns out to be too broad, you do not need a rebuild to get past it - prefix the command with the bypass, which applies to that one invocation:
 
 ```bash
 HOST_ONLY_GUARD_BYPASS=1 npx wrangler deploy
