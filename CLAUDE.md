@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this repo is
 
-This is not an application — it is the definition of a headless Docker dev container that sandboxes Claude Code itself. There is no source tree, no package manifest, no test suite. The deliverable is `.devcontainer/`: an image, a firewall, and a verification script. Everything else (README, `openspec/`) describes or plans that.
+This is not an application - it is the definition of a headless Docker dev container that sandboxes Claude Code itself. There is no source tree, no package manifest, no test suite. The deliverable is `.devcontainer/`: an image, a firewall, and a verification script. Everything else (README, `openspec/`) describes or plans that.
 
 The sandbox exists so that `claude --dangerously-skip-permissions` is safe to run: the agent can only see the bind-mounted project folder, can only reach whitelisted hosts, and cannot `git push`. Cost is meant to be the only remaining risk.
 
@@ -16,7 +16,7 @@ If `$DEVCONTAINER=true` (the normal case when Claude Code runs here), you are in
 - `/tmp` is a tmpfs mounted **`noexec`**. It is writable but nothing there can be executed, so it is not a general-purpose staging area for tools — a script written to `/tmp` and `chmod +x`-ed still fails to run with exit 126.
 - The scripts under `/usr/local/bin/` are the copies baked into the running image, not the repo's working tree. Editing `.devcontainer/*.sh` changes nothing about the current session; the change takes effect only after a host-side rebuild.
 - Egress is default-deny, so most network commands fail by design. A failed fetch is usually the firewall working, not a bug.
-- Some commands are blocked outright, before they run, by the guard described below — they authenticate against or act on an account that only exists on the host. That is expected behaviour, not a defect to route around: relay the message you are given to the user, quoting the command they need to run outside the sandbox, and get on with the rest of the task. `/usr/local/etc/host-only-commands.txt` lists them.
+- Some commands are blocked outright, before they run, by the guard described below — they authenticate against or act on an account that only exists on the host. That is expected behaviour. Relay the message you are given to the user, quoting the command they need to run outside the sandbox, and get on with the rest of the task. `/usr/local/etc/host-only-commands.txt` lists them.
 
 Consequence: **you cannot verify your own changes to this repo.** Changes to `.devcontainer/` must be exercised by the user on the host (see below). Say plainly what you were unable to test rather than implying it was checked.
 
