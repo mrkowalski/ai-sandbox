@@ -15,16 +15,17 @@
   "remoteUser": "node",
   "initializeCommand": "mkdir -p '${localWorkspaceFolder}/.git'",
   "mounts": [
-    "source=claude-code-bashhistory-${devcontainerId},target=/commandhistory,type=volume",
-    "source=claude-code-config-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=claude-code-npm-${devcontainerId},target=/home/node/.npm,type=volume",
+    "source=claude-code-bashhistory-${localEnv:SBX_SLUG}-${devcontainerId},target=/commandhistory,type=volume",
+    "source=claude-code-config-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.claude,type=volume",
+    "source=claude-code-npm-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.npm,type=volume",
     "source=${localWorkspaceFolder}/.git,target=${localWorkspaceFolder}/.git,type=bind,readonly"
   ],
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
     "CLAUDE_CONFIG_DIR": "/home/node/.claude",
     "TZ": "Europe/Warsaw",
-    "COLORTERM": "truecolor"
+    "COLORTERM": "truecolor",
+    "SBX_WORKSPACE": "${localWorkspaceFolder}"
   },
   "workspaceMount": "source=${localWorkspaceFolder},target=${localWorkspaceFolder},type=bind",
   "workspaceFolder": "${localWorkspaceFolder}",

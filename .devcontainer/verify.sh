@@ -17,18 +17,27 @@
 # and no more:
 #
 #   6. npm's cache directory is writable *and* exec-capable
-#   7. The rootfs outside those mounts is still read-only
+#   7. The three named volumes are named for this workspace: each one is
+#      `claude-code-<kind>-<slug>-<devcontainerId>`, with the slug re-derived
+#      inside the container from SBX_WORKSPACE. This one is a FAIL rather than
+#      a WARN even though ${devcontainerId} keeps the volumes isolated whatever
+#      the name says. What fails here is the launcher: a container whose
+#      volumes do not carry its own workspace name was started by something
+#      that does not know the naming rule, and the volumes it would use are a
+#      second, stray set the wrappers will never mount again. Loud over quiet,
+#      like the rest of this file.
+#   8. The rootfs outside those mounts is still read-only
 #
 # and that the sandbox tells the agent which commands cannot work in here,
 # rather than leaving it to find out by running them:
 #
-#   8. The host-only command list is installed, and the guard that enforces
+#   9. The host-only command list is installed, and the guard that enforces
 #      it blocks a declared command and passes an ordinary one
 #
 # and that the mounted project's git history is the host's to write, not the
 # agent's:
 #
-#   9. The workspace's git directory is read-only while the repository stays
+#  10. The workspace's git directory is read-only while the repository stays
 #      readable
 #
 # Prints "VERIFIED" and exits 0 when every required check passes, otherwise
@@ -570,7 +579,138 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Check 7: the rootfs is still read-only
+# Check 7: the named volumes belong to this workspace
+# ---------------------------------------------------------------------------
+#
+# devcontainer.json names the three volumes `claude-code-<kind>-<slug>-<id>`:
+# the workspace path, slugified by the host launcher and passed in as
+# ${localEnv:SBX_SLUG}, followed by ${devcontainerId}. The id is what keeps two
+# projects apart - the CLI derives it from the workspace folder and no launcher
+# can forget to supply it - so a missing or wrong slug pools nothing. What it
+# does mean is that whatever started this container does not know the naming
+# rule: a stale .bashrc block, an editor integration that bypasses sbx-acp.sh,
+# or a drift between sbx_slug() and the copy of the derivation below.
+#
+# That is a FAIL rather than a WARN for the same reason the rest of this file
+# fails loudly: the launch being stopped is not unsafe, it is misnamed, and the
+# volumes it would have used are a second, stray set that the wrappers will
+# never mount again. An earlier revision of this check had to be a FAIL for a
+# stronger reason - the names carried no ${devcontainerId} then, so an empty
+# slug really did pool every project's Claude Code credentials into one volume.
+# That is no longer the failure mode, and the comment should not imply it is.
+#
+# The container has no Docker socket, so the volume names are read from the
+# mount table, where the volume driver's host path carries the name:
+#
+#   /var/lib/docker/volumes/claude-code-config-<slug>-<id>/_data
+#
+# The expected slug is re-derived here from ${localWorkspaceFolder}, passed in
+# as SBX_WORKSPACE, rather than from SBX_SLUG itself - comparing SBX_SLUG to a
+# name built out of SBX_SLUG would only prove it equals itself. The id cannot
+# be recomputed in here at all, so it is only required to be present: a name
+# that stops at the slug was not written by this devcontainer.json. The
+# derivation below is a second copy of sbx_slug() in the repo's sbx-env.sh and
+# must stay byte-for-byte equivalent to it; if the two ever drift, this check
+# fails at the next start, which is the intended way to find out.
+
+section "named volumes must be scoped to this workspace"
+
+# Mirror of sbx_slug() in sbx-env.sh: strip trailing slashes and the leading
+# one, lowercase, map every byte outside [a-z0-9_.-] to '-'. LC_ALL=C is
+# already exported at the top of this script; it is repeated on the pipeline so
+# that the bytewise behaviour survives someone changing that.
+workspace_slug() {
+  local path="$1"
+  while [ "${path%/}" != "$path" ]; do path="${path%/}"; done
+  path="${path#/}"
+  [ -n "$path" ] || return 1
+  printf '%s' "$path" | LC_ALL=C tr 'A-Z' 'a-z' | LC_ALL=C tr -c 'a-z0-9_.-' '-'
+}
+
+# volume_backing <mountpoint> - the name of the named volume mounted there.
+#
+# Field 4 of a mountinfo line is the path within the source filesystem and
+# field 5 is the mount point. A named volume's field 4 ends in
+# /volumes/<name>/_data; anything else (a bind mount, a tmpfs) is not a named
+# volume and is reported as undeterminable rather than guessed at. The last
+# matching line wins, so an overmount is read rather than what it covered.
+volume_backing() {
+  local target="$1" src
+  src=$(awk -v t="$target" '$5 == t { s = $4 } END { if (s != "") print s }' /proc/self/mountinfo 2>/dev/null)
+  case "$src" in
+    */volumes/*/_data) src="${src%/_data}"; printf '%s' "${src##*/}" ;;
+    *) return 1 ;;
+  esac
+}
+
+SBX_WS="${SBX_WORKSPACE:-}"
+EXPECTED_SLUG=""
+
+if [ -z "$SBX_WS" ]; then
+  bad "SBX_WORKSPACE is not set - cannot tell which workspace these volumes belong to"
+  info "devcontainer.json should pass \"SBX_WORKSPACE\": \"\${localWorkspaceFolder}\" through containerEnv"
+  info "without it the volume names cannot be checked, and a misnamed volume would go unnoticed"
+elif ! EXPECTED_SLUG=$(workspace_slug "$SBX_WS"); then
+  bad "SBX_WORKSPACE ($SBX_WS) does not yield a usable volume name"
+else
+  info "workspace: $SBX_WS"
+  info "expected slug: $EXPECTED_SLUG"
+
+  # kind:mountpoint - the three volumes devcontainer.json declares.
+  for spec in \
+    "bashhistory:/commandhistory" \
+    "config:/home/node/.claude" \
+    "npm:/home/node/.npm"
+  do
+    kind="${spec%%:*}"
+    mountpoint="${spec#*:}"
+
+    # The name has to start with this prefix and carry the id after it. The
+    # trailing '-' is part of the prefix so that a slug which merely starts the
+    # same way - `home-marcin-tools` against `home-marcin-tools-sandbox` - does
+    # not match.
+    base="claude-code-${kind}-${EXPECTED_SLUG}"
+    prefix="${base}-"
+
+    if ! actual=$(volume_backing "$mountpoint"); then
+      bad "$mountpoint is not backed by a named volume - cannot confirm it is this workspace's"
+      info "nothing in /proc/self/mountinfo maps $mountpoint to a /volumes/<name>/_data source"
+      continue
+    fi
+
+    # "$prefix"?* requires at least one character after the prefix: the id.
+    case "$actual" in
+      "$prefix"?*)
+        ok "$mountpoint is $actual"
+        ;;
+      "$base"|"$prefix")
+        bad "$mountpoint is backed by a volume with no \${devcontainerId} suffix"
+        info "expected: ${prefix}<devcontainerId>"
+        info "mounted:  $actual"
+        info "the workspace name is right but the uniqueness key is missing, so this mount"
+        info "was not written by this devcontainer.json - most likely the container predates"
+        info "the mounts it now declares and needs recreating with --remove-existing-container"
+        ;;
+      "claude-code-${kind}--"*)
+        bad "$mountpoint is backed by a volume with an empty workspace name"
+        info "expected: ${prefix}<devcontainerId>"
+        info "mounted:  $actual"
+        info "SBX_SLUG was not exported by the launcher. The volume is still this workspace's -"
+        info "\${devcontainerId} keeps it apart from every other project - but it is a second,"
+        info "stray set the wrappers will not use. Launch through sbx-up or sbx-acp.sh."
+        ;;
+      *)
+        bad "$mountpoint is backed by the wrong volume"
+        info "expected: ${prefix}<devcontainerId>"
+        info "mounted:  $actual"
+        info "the name does not carry this workspace's slug: either the container was started"
+        info "against another project's volumes, or sbx_slug() and this script have drifted"
+        ;;
+    esac
+  done
+fi
+# ---------------------------------------------------------------------------
+# Check 8: the rootfs is still read-only
 # ---------------------------------------------------------------------------
 #
 # Every writable mount added to the container chips away at the guarantee that
@@ -624,7 +764,7 @@ fi
 check_ro_dir "$HOME" "\$HOME (the named volumes mount inside it)"
 
 # ---------------------------------------------------------------------------
-# Check 8: host-only commands are declared and enforced
+# Check 9: host-only commands are declared and enforced
 # ---------------------------------------------------------------------------
 #
 # Unlike the checks above, this one is about what the agent is *told* rather
@@ -782,7 +922,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Check 9: the mounted repository cannot be written
+# Check 10: the mounted repository cannot be written
 # ---------------------------------------------------------------------------
 #
 # This is the boundary that check 8's git entries only describe. devcontainer.json

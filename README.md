@@ -33,9 +33,35 @@ git clone https://github.com/mrkowalski/sandbox ~/tools/sandbox
 ```bash
 # ~/.bashrc
 SBX=~/tools/sandbox/.devcontainer/devcontainer.json
-sbx-up()   { devcontainer up --workspace-folder "$PWD" --config "$SBX" --remove-existing-container; }
+source ~/tools/sandbox/sbx-env.sh   # defines sbx_slug / sbx_tag_image
+
+sbx-up() {
+    SBX_SLUG=$(sbx_slug) || return 1
+    export SBX_SLUG
+    devcontainer up --workspace-folder "$PWD" --config "$SBX" --remove-existing-container || return 1
+    sbx_tag_image
+}
 sbx-claude(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude --dangerously-skip-permissions; }
 sbx-resume(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude --dangerously-skip-permissions --resume; }
+```
+
+`sbx-up` exports `SBX_SLUG` because that is what puts your project's name on its volumes and its image. Forgetting it is untidy rather than dangerous: `devcontainer.json` still appends `${devcontainerId}`, which the CLI derives from the workspace folder, so the volumes stay this project's either way — but they are named `claude-code-config--<id>` and are a *second* set, which `sbx-up` will not mount again. `verify.sh` checks the mounted names and fails when they are not this workspace's, naming the empty component — but it is a report, not a gate. Nothing runs it at container start, so a launcher that does not know the rule litters quietly until somebody runs `verify.sh` by hand. `sbx-claude` and `sbx-resume` attach to an existing container and need no slug.
+
+### Driving it from an editor (ACP)
+
+`sbx-acp.sh` exposes the sandboxed Claude Code as an ACP agent server, so an editor that speaks the Agent Client Protocol drives it under the same confinement a terminal session gets. Point the editor's agent command at the script; it launches, or reuses, the container for the folder it is started in.
+
+```bash
+~/tools/sandbox/sbx-acp.sh
+```
+
+stdout belongs to the ACP stream, so every diagnostic goes to `$SBX_ACP_LOG` (`/tmp/sbx-acp.log` by default) — that is where to look when a session will not start. The script derives `SBX_SLUG` itself and refuses to launch without one, so its volumes are named exactly as `sbx-up` names them.
+
+One caveat, and it is a one-off per project. Unlike `sbx-up`, the script does not pass `--remove-existing-container`: doing so would kill a live ACP container every time a second editor session opened. A container created before the volume naming last changed is therefore reused as it stands, old volume names and all — and nothing announces it, because `verify.sh` is the thing that would and nothing runs it at start. The symptom is a Claude Code that has forgotten its credentials. Recreate the container once, from the project folder:
+
+```bash
+sbx-up   # or, without the .bashrc functions:
+docker rm -f "$(docker ps -aq --filter label=devcontainer.local_folder=$PWD)"
 ```
 
 ## The firewall
@@ -70,12 +96,26 @@ HOST_ONLY_GUARD_BYPASS=1 npx wrangler deploy
 
 ### Container volumes
 
-Each container gets its own npm cache volume (`claude-code-npm-<devcontainerId>`) so that `npm install` and `npx` work against the read-only rootfs. npm never prunes that cache on its own. To reclaim the space, either run `npm cache clean --force` inside the container, or remove the volume from the host:
+Each project gets three named volumes — bash history, Claude Code config, and an npm cache — named after the workspace path it was launched from, followed by the dev container id. Launching in `/home/marcin/tools/sandbox` produces:
+
+```
+claude-code-bashhistory-home-marcin-tools-sandbox-<devcontainerId>
+claude-code-config-home-marcin-tools-sandbox-<devcontainerId>
+claude-code-npm-home-marcin-tools-sandbox-<devcontainerId>
+```
+
+The slug is the absolute path with the leading `/` stripped, lowercased, and every character outside `[a-z0-9_.-]` replaced by `-`; `sbx_slug` in `sbx-env.sh` is the one definition of it. It leads the name so a project's volumes sort together; the `${devcontainerId}` hash trails it and is what actually keeps two projects apart, whichever launcher was used. The image is tagged from the slug alone, as `sbx-<slug>`, so one project's image and volumes filter together.
+
+The npm cache volume is what makes `npm install` and `npx` work against the read-only rootfs, and npm never prunes it. To reclaim the space, either run `npm cache clean --force` inside the container, or remove the volume from the host:
 
 ```bash
-docker volume ls  | grep claude-code-npm     # find them
-docker volume rm  <volume-name>              # container must be stopped
+docker volume ls | grep home-marcin-tools-sandbox   # one project's volumes
+docker volume ls | grep claude-code-npm             # every project's npm caches
+docker volume rm <volume-name>                      # container must be stopped
+docker images   | grep '^sbx-'                      # the matching image tags
 ```
+
+Removing a project's `claude-code-config-*` volume discards its Claude Code credentials and session history, so `sbx-resume` starts from nothing there; the other two cost only a re-download and a lost shell history.
 
 ### OpenSpec maintenance
 
