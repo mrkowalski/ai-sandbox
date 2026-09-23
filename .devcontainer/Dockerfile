@@ -94,10 +94,8 @@ RUN echo 'export PATH="$PATH:/usr/local/share/npm-global/bin"' \
     chmod +x /usr/local/bin/verify.sh && \
     echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
     echo "node ALL=(root) NOPASSWD: /usr/local/bin/verify.sh" > /etc/sudoers.d/verify && \
-    echo "node ALL=(ALL) NOPASSWD: ALL" > /etc/sudoers.d/node-all && \
     chmod 0440 /etc/sudoers.d/node-firewall && \
-    chmod 0440 /etc/sudoers.d/verify && \
-    chmod 0440 /etc/sudoers.d/node-all
+    chmod 0440 /etc/sudoers.d/verify
 
 # The enforcement point. An image ENTRYPOINT runs on every container start -
 # `docker start` and a post-reboot restart included - which is what postStartCommand
