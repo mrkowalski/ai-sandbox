@@ -45,19 +45,11 @@ sbx-claude(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude
 sbx-resume(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude --dangerously-skip-permissions --resume; }
 ```
 
-`sbx-up` exports `SBX_SLUG` because that is what puts your project's name on its volumes and its image. Forgetting it is untidy rather than dangerous: `devcontainer.json` still appends `${devcontainerId}`, which the CLI derives from the workspace folder, so the volumes stay this project's either way - but they are named `claude-code-config--<id>` and are a *second* set, which `sbx-up` will not mount again. `verify.sh` checks the mounted names and fails when they are not this workspace's, naming the empty component - but it is a report, not a gate. Nothing runs it at container start, so a launcher that does not know the rule litters quietly until somebody runs `verify.sh` by hand. `sbx-claude` and `sbx-resume` attach to an existing container and need no slug.
+### ACP
 
-### Driving it from an editor (ACP)
+`sbx-acp.sh` exposes the sandboxed Claude Code as an ACP agent server.
 
-`sbx-acp.sh` exposes the sandboxed Claude Code as an ACP agent server, so an editor that speaks the Agent Client Protocol drives it under the same confinement a terminal session gets. Point the editor's agent command at the script; it launches, or reuses, the container for the folder it is started in.
-
-```bash
-~/tools/sandbox/sbx-acp.sh
-```
-
-stdout belongs to the ACP stream, so every diagnostic goes to `$SBX_ACP_LOG` (`/tmp/sbx-acp.log` by default) - that is where to look when a session will not start. The script derives `SBX_SLUG` itself and refuses to launch without one, so its volumes are named exactly as `sbx-up` names them.
-
-One caveat, and it is a one-off per project. Unlike `sbx-up`, the script does not pass `--remove-existing-container`: doing so would kill a live ACP container every time a second editor session opened. A container created before the volume naming last changed is therefore reused as it stands, old volume names and all - and nothing announces it, because `verify.sh` is the thing that would and nothing runs it at start. The symptom is a Claude Code that has forgotten its credentials. Recreate the container once, from the project folder:
+Unlike `sbx-up`, the script does not pass `--remove-existing-container`: doing so would kill a live ACP container every time a second editor session opened. A container created before the volume naming last changed is therefore reused as it stands, old volume names and all - and nothing announces it, because `verify.sh` is the thing that would and nothing runs it at start. The symptom is a Claude Code that has forgotten its credentials. Recreate the container once, from the project folder:
 
 ```bash
 sbx-up   # or, without the .bashrc functions:
@@ -66,7 +58,7 @@ docker rm -f "$(docker ps -aq --filter label=devcontainer.local_folder=$PWD)"
 
 ## The firewall
 
-The firewall is installed by the image entrypoint. If the firewall cannot be installed - most often a hostname in `allowed-domains.txt` that will not resolve - the container stops instead of starting, and `docker logs` says why. If you need a shell inside an image whose container will not start, bypass the entrypoint from the host:
+The firewall is installed by the image entrypoint. If the firewall cannot be installed - most often a hostname in `allowed-domains.txt` that will not resolve - the container stops, and `docker logs` says why. If you need a shell inside an image whose container will not start, bypass the entrypoint from the host:
 
 ```bash
 docker run --rm -it --entrypoint /bin/bash <image>   # no firewall installed
