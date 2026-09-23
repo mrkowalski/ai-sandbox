@@ -20,7 +20,7 @@ That component SHALL lead the name, ahead of any uniqueness key, so that one pro
 
 #### Scenario: A path that is not a legal volume name
 
-- **WHEN** the workspace path contains characters Docker does not accept in a volume name — a space, a `+`, an uppercase letter, or a non-ASCII character
+- **WHEN** the workspace path contains characters Docker does not accept in a volume name - a space, a `+`, an uppercase letter, or a non-ASCII character
 - **THEN** the derived name still consists only of characters Docker accepts, and the launch succeeds rather than failing on an invalid volume name
 
 ### Requirement: Isolation does not depend on the launcher
@@ -34,7 +34,7 @@ Volume names SHALL also contain a uniqueness key supplied by the dev container t
 
 #### Scenario: A launcher that does not supply the workspace name
 
-- **WHEN** the sandbox is launched by something that does not supply the workspace-path component — a bare dev container launch outside the project's wrappers — so the volumes are named with an empty path component
+- **WHEN** the sandbox is launched by something that does not supply the workspace-path component - a bare dev container launch outside the project's wrappers - so the volumes are named with an empty path component
 - **THEN** the volumes it mounts are still scoped to that one workspace and are shared with no other project
 - **AND** they are a different set from the ones the wrappers mount for the same workspace, so that launch starts with no Claude Code credentials and a cold npm cache
 
@@ -68,6 +68,6 @@ Verification SHALL assert, whenever the verification suite runs, that each of th
 
 #### Scenario: A stale or mismatched name fails verification
 
-- **WHEN** the mounted volumes' names do not carry the component derived from this container's workspace path — because the derivation on the host and the one used to check it have drifted apart, or the container was started against another workspace's volumes
+- **WHEN** the mounted volumes' names do not carry the component derived from this container's workspace path - because the derivation on the host and the one used to check it have drifted apart, or the container was started against another workspace's volumes
 - **THEN** verification reports a failure naming both the expected and the mounted volume
 - **AND** verification fails rather than passing silently when the mounted volume names cannot be determined at all

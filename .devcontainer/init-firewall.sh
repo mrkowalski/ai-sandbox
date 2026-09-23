@@ -32,8 +32,8 @@
 #
 # Correctness of the resulting ruleset is asserted separately by verify.sh.
 
-set -euo pipefail  # Exit on error, undefined vars, and pipeline failures
-IFS=$'\n\t'       # Stricter word splitting
+set -euo pipefail
+IFS=$'\n\t'
 
 # ------------------------------------------------------------- fail closed ---
 #
@@ -51,7 +51,7 @@ FIREWALL_OK=0
 seal() {
     local rc=$?
     if [ "$FIREWALL_OK" -eq 1 ]; then
-        return 0    # successful run; leave the completed ruleset alone
+        return 0
     fi
 
     echo "ERROR: firewall setup aborted (exit $rc) - sealing the container" >&2

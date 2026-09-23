@@ -8,7 +8,7 @@ Guarantees that the git repository of the project mounted into the sandbox canno
 
 The sandbox SHALL make the git directory of the mounted workspace unwritable to the agent by a containment control enforced outside the agent's reach, not by instruction or by a command filter alone.
 
-Every git operation that records, rewrites, or stages repository state — including committing, merging, rebasing, cherry-picking, reverting, tagging, staging, stashing, moving refs, and editing repository configuration — SHALL fail when attempted against the mounted workspace, whether invoked by the agent directly, through a package runner, or from inside a script the agent runs.
+Every git operation that records, rewrites, or stages repository state - including committing, merging, rebasing, cherry-picking, reverting, tagging, staging, stashing, moving refs, and editing repository configuration - SHALL fail when attempted against the mounted workspace, whether invoked by the agent directly, through a package runner, or from inside a script the agent runs.
 
 This protection SHALL NOT depend on the session's permission mode, on any command list, or on any instruction the agent is given, and SHALL remain in force if all three are absent or bypassed.
 
@@ -45,7 +45,7 @@ At minimum, reporting status, showing differences against the index or a commit,
 
 ### Requirement: Repositories outside the mounted workspace are unaffected
 
-The protection SHALL apply to the mounted workspace's repository. A repository the sandbox creates in its own writable scratch space SHALL remain fully usable, so that tooling which builds a throwaway repository — including the sandbox's own start-time verification — continues to work.
+The protection SHALL apply to the mounted workspace's repository. A repository the sandbox creates in its own writable scratch space SHALL remain fully usable, so that tooling which builds a throwaway repository - including the sandbox's own start-time verification - continues to work.
 
 #### Scenario: Start-time verification's scratch repository
 
@@ -75,7 +75,7 @@ Where the protection requires a path to exist in the mounted project, the sandbo
 
 The sandbox's start-time verification SHALL assert that the protection is actually in force, and SHALL fail the launch when it is not.
 
-It SHALL confirm that a write to the mounted repository is refused, and — because over-blocking is as much a failure as under-blocking — that reading the repository still succeeds. It SHALL also assert the absence of SSH private keys, a forwarded SSH agent, and a git credential helper.
+It SHALL confirm that a write to the mounted repository is refused, and - because over-blocking is as much a failure as under-blocking - that reading the repository still succeeds. It SHALL also assert the absence of SSH private keys, a forwarded SSH agent, and a git credential helper.
 
 When the mounted workspace contains no git repository, verification SHALL report that the write assertion did not apply rather than passing it silently or failing the launch.
 

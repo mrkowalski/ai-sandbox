@@ -18,7 +18,7 @@ Anchoring alone does not satisfy this requirement; the launch configuration must
 
 #### Scenario: Restarted outside the devcontainer CLI
 
-- **WHEN** a stopped container is started again by any means that does not run `postStartCommand` — `docker start`, a container-engine UI restart control, or an automatic restart after a host reboot
+- **WHEN** a stopped container is started again by any means that does not run `postStartCommand` - `docker start`, a container-engine UI restart control, or an automatic restart after a host reboot
 - **THEN** the firewall is installed again for the new network namespace
 - **AND** the ruleset is in whitelist mode, exactly as after a `devcontainer up`
 
@@ -83,7 +83,7 @@ The check that gates container start SHALL assert only properties of the local r
 
 #### Scenario: A broken ruleset does block startup
 
-- **WHEN** the ruleset is not in whitelist mode at start — the OUTPUT policy is not DROP, the ipset is missing or empty, or the ipset ACCEPT rule is absent
+- **WHEN** the ruleset is not in whitelist mode at start - the OUTPUT policy is not DROP, the ipset is missing or empty, or the ipset ACCEPT rule is absent
 - **THEN** the container stops
 
 ### Requirement: Firewall setup fails closed
@@ -96,11 +96,11 @@ This SHALL hold however the script is invoked, including a manual re-run in an a
 
 - **WHEN** a hostname in the whitelist cannot be resolved
 - **THEN** setup aborts, as it does today
-- **AND** the container is left sealed — all chain policies DROP and no general-egress ACCEPT rule — rather than open
+- **AND** the container is left sealed - all chain policies DROP and no general-egress ACCEPT rule - rather than open
 
 #### Scenario: Any other mid-setup abort
 
-- **WHEN** setup aborts for any other reason — an unreadable whitelist, an empty whitelist, an invalid address from DNS, a failure to create the ipset, or an undetectable host IP
+- **WHEN** setup aborts for any other reason - an unreadable whitelist, an empty whitelist, an invalid address from DNS, a failure to create the ipset, or an undetectable host IP
 - **THEN** the container is left sealed rather than open
 
 #### Scenario: A manual re-run that fails does not open the container

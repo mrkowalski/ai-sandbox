@@ -104,7 +104,6 @@ fi
 
 CURL_BASE=(-sS -o /dev/null --connect-timeout "$CONNECT_TIMEOUT" --max-time "$MAX_TIME")
 
-# _probe <url> [extra curl args...] -> sets PROBE_RC, PROBE_CONNECT, PROBE_CODE, PROBE_ERR
 _probe() {
   local url="$1"; shift
   local errf out
@@ -121,7 +120,6 @@ _probe() {
 
 _connected() { awk -v t="${PROBE_CONNECT:-0}" 'BEGIN { exit !(t + 0 > 0) }'; }
 
-# check_unreachable <url> <label> [extra curl args...]
 # Passes only when the TCP connection never completed.
 check_unreachable() {
   local url="$1" label="$2"; shift 2
@@ -147,7 +145,6 @@ check_unreachable() {
   return 0
 }
 
-# check_reachable <url> <label> <required|optional>
 # Passes when the host answers with any HTTP status: a 401/403/405 still
 # proves the request traversed the firewall.
 check_reachable() {
@@ -208,7 +205,6 @@ classify_push_failure() {
   fi
 }
 
-# attempt_push <url> <label>
 # Passes when `git push --dry-run` fails. --dry-run performs the full connect
 # and authenticate handshake but never writes to the remote, so this is safe
 # to run against a real origin.

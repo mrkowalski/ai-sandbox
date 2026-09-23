@@ -1,6 +1,6 @@
 ## Purpose
 
-Gives the sandbox a writable, exec-capable npm cache so that ordinary JavaScript tooling (`npm install`, `npx <tool>`) works against a project mounted at `/workspace`, while holding the sandbox's existing confinement guarantees — read-only rootfs, default-deny egress, no `git push` — unchanged.
+Gives the sandbox a writable, exec-capable npm cache so that ordinary JavaScript tooling (`npm install`, `npx <tool>`) works against a project mounted at `/workspace`, while holding the sandbox's existing confinement guarantees - read-only rootfs, default-deny egress, no `git push` - unchanged.
 
 ## Requirements
 
@@ -88,7 +88,7 @@ The cache SHALL be the only new writable location, and it SHALL NOT be a path fr
 
 ### Requirement: The cache guarantees are verified at every container start
 
-Consistent with the sandbox's design that guarantees are checked rather than documented, the verification suite SHALL assert both halves of this capability — that the cache is writable and exec-capable, and that the rootfs and egress restrictions still hold. A failure SHALL block the container from starting.
+Consistent with the sandbox's design that guarantees are checked rather than documented, the verification suite SHALL assert both halves of this capability - that the cache is writable and exec-capable, and that the rootfs and egress restrictions still hold. A failure SHALL block the container from starting.
 
 #### Scenario: Verification asserts the cache is usable
 

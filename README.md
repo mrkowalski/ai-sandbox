@@ -45,7 +45,7 @@ sbx-claude(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude
 sbx-resume(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude --dangerously-skip-permissions --resume; }
 ```
 
-`sbx-up` exports `SBX_SLUG` because that is what puts your project's name on its volumes and its image. Forgetting it is untidy rather than dangerous: `devcontainer.json` still appends `${devcontainerId}`, which the CLI derives from the workspace folder, so the volumes stay this project's either way — but they are named `claude-code-config--<id>` and are a *second* set, which `sbx-up` will not mount again. `verify.sh` checks the mounted names and fails when they are not this workspace's, naming the empty component — but it is a report, not a gate. Nothing runs it at container start, so a launcher that does not know the rule litters quietly until somebody runs `verify.sh` by hand. `sbx-claude` and `sbx-resume` attach to an existing container and need no slug.
+`sbx-up` exports `SBX_SLUG` because that is what puts your project's name on its volumes and its image. Forgetting it is untidy rather than dangerous: `devcontainer.json` still appends `${devcontainerId}`, which the CLI derives from the workspace folder, so the volumes stay this project's either way - but they are named `claude-code-config--<id>` and are a *second* set, which `sbx-up` will not mount again. `verify.sh` checks the mounted names and fails when they are not this workspace's, naming the empty component - but it is a report, not a gate. Nothing runs it at container start, so a launcher that does not know the rule litters quietly until somebody runs `verify.sh` by hand. `sbx-claude` and `sbx-resume` attach to an existing container and need no slug.
 
 ### Driving it from an editor (ACP)
 
@@ -55,9 +55,9 @@ sbx-resume(){ devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude
 ~/tools/sandbox/sbx-acp.sh
 ```
 
-stdout belongs to the ACP stream, so every diagnostic goes to `$SBX_ACP_LOG` (`/tmp/sbx-acp.log` by default) — that is where to look when a session will not start. The script derives `SBX_SLUG` itself and refuses to launch without one, so its volumes are named exactly as `sbx-up` names them.
+stdout belongs to the ACP stream, so every diagnostic goes to `$SBX_ACP_LOG` (`/tmp/sbx-acp.log` by default) - that is where to look when a session will not start. The script derives `SBX_SLUG` itself and refuses to launch without one, so its volumes are named exactly as `sbx-up` names them.
 
-One caveat, and it is a one-off per project. Unlike `sbx-up`, the script does not pass `--remove-existing-container`: doing so would kill a live ACP container every time a second editor session opened. A container created before the volume naming last changed is therefore reused as it stands, old volume names and all — and nothing announces it, because `verify.sh` is the thing that would and nothing runs it at start. The symptom is a Claude Code that has forgotten its credentials. Recreate the container once, from the project folder:
+One caveat, and it is a one-off per project. Unlike `sbx-up`, the script does not pass `--remove-existing-container`: doing so would kill a live ACP container every time a second editor session opened. A container created before the volume naming last changed is therefore reused as it stands, old volume names and all - and nothing announces it, because `verify.sh` is the thing that would and nothing runs it at start. The symptom is a Claude Code that has forgotten its credentials. Recreate the container once, from the project folder:
 
 ```bash
 sbx-up   # or, without the .bashrc functions:
@@ -96,7 +96,7 @@ HOST_ONLY_GUARD_BYPASS=1 npx wrangler deploy
 
 ### Container volumes
 
-Each project gets three named volumes — bash history, Claude Code config, and an npm cache — named after the workspace path it was launched from, followed by the dev container id. Launching in `/home/marcin/tools/sandbox` produces:
+Each project gets three named volumes - bash history, Claude Code config, and an npm cache - named after the workspace path it was launched from, followed by the dev container id. Launching in `/home/marcin/tools/sandbox` produces:
 
 ```
 claude-code-bashhistory-home-marcin-tools-sandbox-<devcontainerId>

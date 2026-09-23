@@ -1,6 +1,6 @@
 ## Purpose
 
-Declares which commands the sandbox refuses to run — because they depend on credentials or endpoints that exist only on the host, or because the mounted repository is read-only — stops the agent from attempting them, and turns each attempt into a clear handoff telling the user exactly what to run outside the sandbox.
+Declares which commands the sandbox refuses to run - because they depend on credentials or endpoints that exist only on the host, or because the mounted repository is read-only - stops the agent from attempting them, and turns each attempt into a clear handoff telling the user exactly what to run outside the sandbox.
 
 ## Requirements
 
@@ -27,16 +27,16 @@ The list SHALL declare the `wrangler` subcommands that authenticate against, or 
 
 #### Scenario: A local-only subcommand of a listed tool
 
-- **WHEN** the agent runs a subcommand of a listed tool that neither authenticates, nor contacts a remote endpoint, nor writes the repository — such as `wrangler dev`, `git diff`, or `git log`
+- **WHEN** the agent runs a subcommand of a listed tool that neither authenticates, nor contacts a remote endpoint, nor writes the repository - such as `wrangler dev`, `git diff`, or `git log`
 - **THEN** the command runs normally and is not treated as host-only
 
 ### Requirement: Git and GitHub account operations are declared host-only
 
-The list SHALL declare host-only every command that writes the mounted repository — recording a commit, rewriting history, publishing it, or staging toward it — and every `gh` subcommand that authenticates against or acts on a GitHub account.
+The list SHALL declare host-only every command that writes the mounted repository - recording a commit, rewriting history, publishing it, or staging toward it - and every `gh` subcommand that authenticates against or acts on a GitHub account.
 
 At minimum this SHALL cover `git push`, `git commit`, `git merge`, `git rebase`, `git cherry-pick`, `git revert`, `git am`, the mutating forms of `git tag`, and the staging commands `git add`, `git stash`, `git rm`, and `git mv`, including their invocations that carry global options such as `-C <dir>`.
 
-Git commands that only read the repository — reporting status, showing differences, reading the log, showing a commit, listing branches, listing tags — SHALL NOT be declared host-only, so the agent can still show the user exactly what it changed.
+Git commands that only read the repository - reporting status, showing differences, reading the log, showing a commit, listing branches, listing tags - SHALL NOT be declared host-only, so the agent can still show the user exactly what it changed.
 
 These declarations SHALL be understood as the sandbox explaining a refusal, not as the mechanism producing it: the mounted repository's write protection is specified in `git-write-protection` and holds independently of this list.
 
@@ -48,7 +48,7 @@ These declarations SHALL be understood as the sandbox explaining a refusal, not 
 
 #### Scenario: A history-writing command other than commit
 
-- **WHEN** the agent attempts a command that would create a commit without invoking `git commit` — a merge, rebase, cherry-pick, revert, or `git am`
+- **WHEN** the agent attempts a command that would create a commit without invoking `git commit` - a merge, rebase, cherry-pick, revert, or `git am`
 - **THEN** it is blocked in the same way, so the declaration cannot be stepped around by choosing a different command
 
 #### Scenario: Git with a global option before the subcommand
@@ -68,7 +68,7 @@ These declarations SHALL be understood as the sandbox explaining a refusal, not 
 
 ### Requirement: Each entry states accurately why its command is refused
 
-An entry's explanation SHALL give the actual reason the command is refused. Where a command is refused for more than one reason — because it cannot work here *and* because the sandbox declines it — the explanation SHALL be true of every command the entry matches.
+An entry's explanation SHALL give the actual reason the command is refused. Where a command is refused for more than one reason - because it cannot work here *and* because the sandbox declines it - the explanation SHALL be true of every command the entry matches.
 
 An entry SHALL NOT attribute a refusal to missing credentials or a blocked endpoint when that is not what prevents the command, and SHALL NOT describe a refused command as broken or as having failed.
 
