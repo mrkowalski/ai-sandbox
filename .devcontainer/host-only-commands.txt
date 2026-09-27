@@ -1,154 +1,30 @@
-# Commands the Claude Code sandbox refuses to run.
-#
-# This file is the whole policy. It is the only place a command is declared
-# host-only; host-only-guard.sh reads it and holds no rules of its own. It is
-# the mirror image of allowed-domains.txt: that file is the only place the
-# sandbox is widened, this one is the only place a command is declared
-# off-limits. Edit this file and rebuild the container to change either.
-#
-# --- what this does and does not guarantee ----------------------------------
-#
-# This file is NOT what stops these commands, and it is not a security
-# boundary. Containment is the firewall, the read-only rootfs, and the
-# read-only .git mount. Every entry here is independently enforced by one of
-# those; this file only decides what the agent is *told*. Which mechanism
-# enforces which group:
-#
-#   firewall + absent credentials   wrangler, gh, and `git push`. The endpoint
-#                                   is not on the egress whitelist and the
-#                                   host user's home is not mounted, so there
-#                                   is no token, key, or helper to use.
-#
-#   read-only .git mount            every other git entry. devcontainer.json
-#                                   binds the workspace's .git directory in
-#                                   read-only, so the write fails in the
-#                                   kernel. This holds whether or not the
-#                                   guard runs, whether or not the command
-#                                   came through the Bash tool, and whether or
-#                                   not the bypass below was used -- a
-#                                   bypassed `git commit` reaches the mount
-#                                   and fails there instead.
-#
-# So the guard's job is never prevention. It is to replace an opaque failure
-# -- a TLS timeout, or `fatal: Unable to create '.../index.lock': Permission
-# denied` -- with a sentence saying what to run on the host. An entry added
-# here that nothing else enforces would be a request, not a rule; say so in
-# its comment if you ever add one.
-#
-# One consequence of where the guard sits: it is a PreToolUse hook on the Bash
-# *tool*, so it never sees a command run from inside a script the agent
-# invokes. verify.sh's own scratch-repo `git commit` is exactly that, and has
-# to keep working -- it builds its repo under `mktemp -d`, outside the
-# workspace, so the .git mount does not reach it either. That follows from
-# where each mechanism sits; it is not a gap to close.
-#
-# --- format -----------------------------------------------------------------
-#
-#     <pattern>  ::  <what the user should be told>
-#
-# Blank lines and lines starting with '#' are ignored. The separator is
-# ' :: ' (space colon colon space); surrounding whitespace is trimmed.
-#
-# <pattern> is a POSIX ERE. The guard anchors it at the START of each
-# normalized command segment, so write the pattern as the command itself --
-# do not add a leading '^'. To match mid-segment, start the pattern with '.*'.
-#
-# Before matching, the guard normalizes the command the agent submitted:
-#
-#   - heredoc bodies are removed, so writing a host-only command into a file
-#     or a document is never mistaken for running it -- the agent is told to
-#     quote these commands to the user, and must stay able to;
-#   - the command is split on ; && || | ( ) into segments, so a listed command
-#     is caught as one element of a chain;
-#   - each segment has leading VAR=value assignments and runner words (npx,
-#     bunx, pnpm dlx, yarn dlx, sudo, env, time, ...) stripped, and the
-#     remaining command is reduced to its basename.
-#
-# So `cd app && npx wrangler deploy --env prod` is matched by a pattern that
-# reads simply `wrangler ... deploy`.
-#
-# <what the user should be told> is printed verbatim to the agent, which is
-# instructed to relay it. Say why the command cannot work here and what to run
-# on the host. The guard already quotes the exact command it blocked, so the
-# text does not need to repeat it.
-#
-# --- escape hatch -----------------------------------------------------------
-#
-# A wrong pattern must never require a container rebuild to get around:
-#
-#     HOST_ONLY_GUARD_BYPASS=1 npx wrangler deploy
-#
-# runs the command anyway, for that one invocation, with a note that the guard
-# was bypassed. If you need the bypass twice, fix the entry instead.
-#
-# --- entries ----------------------------------------------------------------
+# <ERE>  ::  <message relayed to the agent>
+# ERE is anchored at the start of each normalized command segment; no leading '^'.
+# Every entry is also enforced by the firewall or the read-only .git mount.
 
-# Cloudflare / wrangler.
-#
-# Grouped by why they cannot work rather than one line per subcommand, so each
-# entry can carry a remedy that is actually true of every command it matches.
-# wrangler subcommands that only touch local files -- `dev`, `types`, `init`,
-# `check` -- are deliberately absent and run normally.
+# wrangler: firewall + absent credentials. Unlisted (local): dev, types, init, check.
 
-wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(login|logout|whoami)([[:space:]]|$)  ::  Cloudflare authentication writes its credentials into the host user's home directory, which is not mounted in this sandbox, and api.cloudflare.com is not on the sandbox's egress whitelist. Authenticating here cannot succeed, and authenticating on the host does not propagate in -- the credentials stay on the host. Run this command in a terminal on the host, in the same project directory, and run any command that needs the resulting session there too.
+wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(login|logout|whoami)([[:space:]]|$)  ::  Cloudflare credentials live in the host user's home, which is not mounted, and api.cloudflare.com is not whitelisted. Host logins do not propagate in. Run this, and anything needing the session, on the host in the same project directory.
 
-wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(deploy|publish|versions|rollback)([[:space:]]|$)  ::  Deploying needs Cloudflare credentials that live on the host and an API endpoint the sandbox's firewall does not allow. Run this command in a terminal on the host, in the same project directory. Everything up to the deploy -- editing, building, testing -- can still be done in here.
+wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(deploy|publish|versions|rollback)([[:space:]]|$)  ::  Deploying needs host Cloudflare credentials and a non-whitelisted endpoint. Run this on the host in the same project directory; editing, building, and testing work here.
 
-wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(secret|d1|kv|r2)(:[a-z]+)?([[:space:]]|$)  ::  This acts on resources in your Cloudflare account, which needs credentials that live on the host and an API endpoint the sandbox's firewall does not allow. Run this command in a terminal on the host, in the same project directory.
+wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(secret|d1|kv|r2)(:[a-z]+)?([[:space:]]|$)  ::  This acts on your Cloudflare account and needs host credentials and a non-whitelisted endpoint. Run this on the host in the same project directory.
 
-wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+tail([[:space:]]|$)  ::  Tailing logs streams them from a deployed Worker over an endpoint the sandbox's firewall does not allow, using credentials that live on the host. Run this command in a terminal on the host.
+wrangler(@[^[:space:]]+)?([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+tail([[:space:]]|$)  ::  Tailing Worker logs needs host credentials and a non-whitelisted endpoint. Run this on the host.
 
-# Git: writing the mounted repository.
-#
-# Enforced by the read-only mount, not by this file. devcontainer.json binds
-# the workspace's .git directory in read-only, so every one of these commands
-# fails on its own whether or not the guard runs, whether or not it was called
-# through the Bash tool, and whether or not the bypass below was used. The
-# entries exist because the failure is otherwise opaque -- git reports
-# `fatal: Unable to create '.../index.lock': Permission denied`, which reads
-# like a broken repository rather than a sandbox boundary. The mount stops the
-# command; these lines explain it.
-#
-# The global-option group is the same idiom as the wrangler entries above, and
-# it absorbs `-C <dir>`, `-c user.email=...`, `--no-pager`, `--git-dir=...`. It
-# only matches tokens starting with `-`, which is what keeps `git checkout
-# commit` and `git log --grep merge` out: the subcommand alternation is only
-# reachable when every token before it was a flag.
-#
-# Reads are untouched by the mount and are deliberately absent here -- the
-# agent has to be able to show what it changed: `status`, `diff`, `log`,
-# `show`, `blame`, `branch` (listing), and `git tag` (listing).
-#
-# The staging entry matches `stash` wholesale, so `git stash list` and `git
-# stash show` are caught as collateral. That is a deliberate simplicity trade:
-# for `stash` the writing form is the common one, unlike `tag` above, and the
-# stash is still readable with `git show stash@{0}` or `git log -g refs/stash`,
-# neither of which trips anything here.
-#
-# `checkout`, `branch`, `reset`, and `restore` are deliberately absent too,
-# for the opposite reason: their reading and writing forms cannot be told
-# apart by a pattern with any confidence, and their reading forms matter. Their
-# writing forms fail on the mount with the bare OS error. /etc/claude-code/
-# CLAUDE.md carries the general rule that explains those.
-#
-# `merge`/`rebase`/`cherry-pick`/`revert` are matched wholesale, so `--abort`
-# and `--continue` are caught too. That is not a loss: the agent cannot start a
-# rebase or a merge in here, so it cannot reach the state they clean up. A repo
-# left mid-rebase on the host is unwound on the host.
+# git: push is firewall + absent credentials; the rest is the read-only .git mount.
+# Unlisted (reads): status, diff, log, show, blame, tag listing.
+# Unlisted (read/write forms indistinguishable): checkout, branch, reset, restore.
+# stash is matched wholesale, so `stash list`/`stash show` are blocked too.
 
-git([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+push([[:space:]]|$)  ::  Pushing cannot work in here on any count: there is no SSH key and no credential helper in this sandbox, the host user's home is not mounted, and the forge is not on the egress whitelist. Authenticating on the host does not propagate in either. Run it in a terminal on the host, in the same project directory.
+git([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+push([[:space:]]|$)  ::  There is no SSH key or credential helper here, the host user's home is not mounted, and the forge is not whitelisted. Run this on the host in the same project directory.
 
-git([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(commit|merge|rebase|cherry-pick|revert|am)([[:space:]]|$)  ::  The project's .git directory is mounted read-only in this sandbox, so this cannot write the repository -- the sandbox does not record history, by design, and nothing here is broken or missing. The working tree is writable: make the change, show it with `git diff`, and describe it. The user commits it in a terminal on the host, in the same project directory.
+git([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(commit|merge|rebase|cherry-pick|revert|am)([[:space:]]|$)  ::  The .git directory is mounted read-only by design; nothing is broken. Make the change in the working tree and show it with `git diff`. The user commits on the host in the same project directory.
 
-git([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+tag[[:space:]]+(-[adfsmu]|--(annotate|sign|delete|force|message|local-user)|[^-[:space:]])  ::  Creating, deleting, or moving a tag writes the repository, and the project's .git directory is mounted read-only in this sandbox. Reading tags is unaffected: `git tag`, `git tag -l`, `git tag --list`, `git tag -n`, and `git tag --contains` all run normally in here. Run the mutating form in a terminal on the host.
+git([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+tag[[:space:]]+(-[adfsmu]|--(annotate|sign|delete|force|message|local-user)|[^-[:space:]])  ::  Writing a tag needs the repository, and the .git directory is mounted read-only. Reading tags (`git tag`, `-l`, `--list`, `-n`, `--contains`) works here. Run the mutating form on the host.
 
-git([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(add|stash|rm|mv)([[:space:]]|$)  ::  Staging writes the repository index, and the project's .git directory is mounted read-only in this sandbox, so this cannot work -- it is not a permissions bug in the project. Edit the working tree instead, which is writable, and show the result with `git diff`; the user stages and commits on the host. To move or delete files, use plain `mv` and `rm` and let the user stage the result.
+git([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(add|stash|rm|mv)([[:space:]]|$)  ::  Staging writes the index, and the .git directory is mounted read-only by design; nothing is broken. Edit the working tree, show it with `git diff`, and use plain `mv`/`rm` to move or delete files. The user stages and commits on the host.
 
-# GitHub CLI.
-#
-# Impossible, like the wrangler entries: `gh` reads its token from the host
-# user's config, which is not mounted, and github.com is not on the egress
-# whitelist. Purely local subcommands -- `--version`, `help`, `completion`,
-# `alias`, `config` -- are absent and run normally.
+# gh: firewall + absent credentials. Unlisted (local): --version, help, completion, alias, config.
 
-gh([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(auth|pr|repo|issue|release|api|gist|workflow|run|browse|codespace|secret|variable|ssh-key|gpg-key|label|project|search|org|ruleset|cache|attestation|status|extension)([[:space:]]|$)  ::  The GitHub CLI authenticates with a token stored in the host user's config, which is not mounted in this sandbox, and github.com is not on the sandbox's egress whitelist. Authenticating in here cannot succeed, and authenticating on the host does not propagate in. Run this command in a terminal on the host, in the same project directory.
+gh([[:space:]]+--?[^[:space:]]+([[:space:]]+[^-[:space:]][^[:space:]]*)?)*[[:space:]]+(auth|pr|repo|issue|release|api|gist|workflow|run|browse|codespace|secret|variable|ssh-key|gpg-key|label|project|search|org|ruleset|cache|attestation|status|extension)([[:space:]]|$)  ::  The gh token lives in the host user's config, which is not mounted, and github.com is not whitelisted. Host logins do not propagate in. Run this on the host in the same project directory.
