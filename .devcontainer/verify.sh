@@ -5,7 +5,8 @@
 # Asserts that the egress firewall installed by init-firewall.sh is actually
 # doing its job:
 #
-#   1. example.com is unreachable over both HTTP and HTTPS
+#   1. example.com is unreachable over both HTTP and HTTPS, and github.com
+#      (where uv would fetch interpreters) is unreachable too
 #   2. `git push` is impossible over SSH and over HTTPS, and there is no SSH
 #      key, forwarded agent, or credential helper to attempt it with
 #   3. The Anthropic endpoints Claude Code needs are reachable
@@ -16,8 +17,8 @@
 # and that the writable mounts the container is granted are the ones intended,
 # and no more:
 #
-#   6. npm's cache directory is writable *and* exec-capable
-#   7. The three named volumes are named for this workspace: each one is
+#   6. npm's and uv's cache directories are writable *and* exec-capable
+#   7. The four named volumes are named for this workspace: each one is
 #      `claude-code-<kind>-<slug>-<devcontainerId>`, with the slug re-derived
 #      inside the container from SBX_WORKSPACE. This one is a FAIL rather than
 #      a WARN even though ${devcontainerId} keeps the volumes isolated whatever
@@ -39,6 +40,10 @@
 #
 #  10. The workspace's git directory is read-only while the repository stays
 #      readable
+#
+# and that Python runs the way the agent is told to run it:
+#
+#  11. `uv run` runs a script offline on the interpreter baked into the image
 #
 # Prints "VERIFIED" and exits 0 when every required check passes, otherwise
 # prints a summary of the failures and exits 1.
@@ -316,7 +321,7 @@ printf 'host: %s   user: %s   date: %s\n' "$(hostname)" "$(id -un)" "$(date -Is)
 # ---------------------------------------------------------------------------
 # Check 1: arbitrary internet egress is blocked
 # ---------------------------------------------------------------------------
-section "Blocked egress (example.com must be unreachable)"
+section "Blocked egress (example.com and github.com must be unreachable)"
 
 check_unreachable "http://example.com"  "example.com over HTTP (port 80)"
 check_unreachable "https://example.com" "example.com over HTTPS (port 443)"
@@ -330,6 +335,10 @@ if [ -n "$EXAMPLE_IP" ]; then
 else
   info "example.com did not resolve; skipping the by-IP probe"
 fi
+
+# PyPI is whitelisted but the interpreter downloads uv would otherwise attempt
+# are served from GitHub. Pinning that shut keeps interpreters baked-only.
+check_unreachable "https://github.com" "github.com over HTTPS (interpreter downloads)"
 
 # ---------------------------------------------------------------------------
 # Check 2: git push is impossible (no credentials)
@@ -414,6 +423,7 @@ check_reachable "https://api.anthropic.com/v1/messages" "api.anthropic.com (API)
 check_reachable "https://statsig.com"                        "statsig.com (feature flags)"           optional
 check_reachable "https://sentry.io"                          "sentry.io (error reporting)"           optional
 check_reachable "https://registry.npmjs.org/-/ping"          "registry.npmjs.org (updates)"          optional
+check_reachable "https://pypi.org/simple/"                   "pypi.org (uv run inline deps)"         optional
 
 # ---------------------------------------------------------------------------
 # Check 4: iptables whitelist mode
@@ -522,7 +532,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Check 6: npm's cache is writable and exec-capable
+# Check 6: npm's and uv's caches are writable and exec-capable
 # ---------------------------------------------------------------------------
 #
 # The rootfs is read-only, so npm's cache has to come from a writable mount or
@@ -538,47 +548,69 @@ fi
 # base image that changes npm's default path is reported here instead of
 # silently reintroducing EROFS at the first `npm install`.
 
-section "npm cache must be writable and executable"
+#
+# uv's cache has the same two failure modes for the same reason: `uv run` and
+# `uvx` build environments inside the cache and exec their interpreters and
+# entry points from there. Its location comes from `uv cache dir`.
+
+section "tool caches must be writable and executable"
+
+# check_cache_dir <dir> <label> <how-to-get-dir> <write-symptom> <exec-symptom>
+check_cache_dir() {
+  local dir="$1" label="$2" source="$3" write_sym="$4" exec_sym="$5"
+  local write_probe exec_probe
+
+  if [ -z "$dir" ]; then
+    bad "could not determine the $label directory ($source)"
+    return
+  elif [ ! -d "$dir" ]; then
+    bad "the $label directory does not exist: $dir"
+    return
+  fi
+  info "$label: $dir"
+
+  # Both probes live at the top level of the cache directory, never inside the
+  # tool's own layout, so nothing they leave behind could be mistaken for cache
+  # content.
+  write_probe="$dir/.verify-write-probe.$$"
+  if ( : > "$write_probe" ) 2>/dev/null; then
+    ok "$label is writable"
+    rm -f "$write_probe"
+  else
+    bad "$label is not writable ($dir) - $write_sym"
+  fi
+
+  exec_probe="$dir/.verify-exec-probe.$$.sh"
+  if ( printf '#!/bin/sh\necho exec-ok\n' > "$exec_probe" ) 2>/dev/null &&
+     chmod +x "$exec_probe" 2>/dev/null; then
+    if [ "$("$exec_probe" 2>/dev/null || true)" = "exec-ok" ]; then
+      ok "$label is exec-capable"
+    else
+      bad "$label is mounted noexec ($dir) - $exec_sym"
+    fi
+  else
+    bad "could not stage the exec probe in the $label ($dir)"
+  fi
+  rm -f "$exec_probe"
+}
 
 NPM_CACHE=$(npm config get cache 2>/dev/null | tr -d '\r' | tail -n 1)
 case "$NPM_CACHE" in null|undefined) NPM_CACHE="" ;; esac
+check_cache_dir "$NPM_CACHE" "npm cache" "'npm config get cache'" \
+  "'npm install' and 'npx' fail with EROFS" \
+  "'npx <tool>' fails with exit 126"
 
-if [ -z "$NPM_CACHE" ]; then
-  bad "could not determine the npm cache directory ('npm config get cache')"
-elif [ ! -d "$NPM_CACHE" ]; then
-  bad "the npm cache directory does not exist: $NPM_CACHE"
-else
-  info "npm cache: $NPM_CACHE"
-
-  # Both probes live at the top level of the cache directory, never inside
-  # _cacache, so nothing they leave behind could be mistaken for cache content.
-  WRITE_PROBE="$NPM_CACHE/.verify-write-probe.$$"
-  if ( : > "$WRITE_PROBE" ) 2>/dev/null; then
-    ok "npm cache is writable"
-    rm -f "$WRITE_PROBE"
-  else
-    bad "npm cache is not writable ($NPM_CACHE) - 'npm install' and 'npx' fail with EROFS"
-  fi
-
-  EXEC_PROBE="$NPM_CACHE/.verify-exec-probe.$$.sh"
-  if ( printf '#!/bin/sh\necho exec-ok\n' > "$EXEC_PROBE" ) 2>/dev/null &&
-     chmod +x "$EXEC_PROBE" 2>/dev/null; then
-    if [ "$("$EXEC_PROBE" 2>/dev/null || true)" = "exec-ok" ]; then
-      ok "npm cache is exec-capable - 'npx <tool>' can run a staged binary"
-    else
-      bad "npm cache is mounted noexec ($NPM_CACHE) - 'npx <tool>' fails with exit 126"
-    fi
-  else
-    bad "could not stage the exec probe in the npm cache ($NPM_CACHE)"
-  fi
-  rm -f "$EXEC_PROBE"
-fi
+UV_CACHE=""
+command -v uv >/dev/null 2>&1 && UV_CACHE=$(uv cache dir 2>/dev/null | tail -n 1)
+check_cache_dir "$UV_CACHE" "uv cache" "'uv cache dir'" \
+  "'uv run' fails with EROFS" \
+  "'uv run' and 'uvx' fail with exit 126"
 
 # ---------------------------------------------------------------------------
 # Check 7: the named volumes belong to this workspace
 # ---------------------------------------------------------------------------
 #
-# devcontainer.json names the three volumes `claude-code-<kind>-<slug>-<id>`:
+# devcontainer.json names the four volumes `claude-code-<kind>-<slug>-<id>`:
 # the workspace path, slugified by the host launcher and passed in as
 # ${localEnv:SBX_SLUG}, followed by ${devcontainerId}. The id is what keeps two
 # projects apart - the CLI derives it from the workspace folder and no launcher
@@ -652,11 +684,12 @@ else
   info "workspace: $SBX_WS"
   info "expected slug: $EXPECTED_SLUG"
 
-  # kind:mountpoint - the three volumes devcontainer.json declares.
+  # kind:mountpoint - the four volumes devcontainer.json declares.
   for spec in \
     "bashhistory:/commandhistory" \
     "config:/home/node/.claude" \
-    "npm:/home/node/.npm"
+    "npm:/home/node/.npm" \
+    "uv:/home/node/.cache/uv"
   do
     kind="${spec%%:*}"
     mountpoint="${spec#*:}"
@@ -756,6 +789,8 @@ if [ -n "$GLOBAL_MODULES" ]; then
 else
   bad "could not determine the global node_modules directory ('npm root -g')"
 fi
+
+check_ro_dir "/usr/local/share/uv/python" "baked Python interpreters"
 
 check_ro_dir "$HOME" "\$HOME (the named volumes mount inside it)"
 
@@ -990,6 +1025,41 @@ else
       bad "the repository cannot be read - the write protection is too broad"
       info "the agent cannot show the user what it changed"
     fi
+  fi
+fi
+
+# ---------------------------------------------------------------------------
+# Check 11: uv runs a script on the baked interpreter
+# ---------------------------------------------------------------------------
+#
+# The managed policy tells the agent to write intermediate scripts in Python
+# and run them with `uv run`, so that path is checked end to end. --offline
+# keeps PyPI out of it: a PyPI outage is check 3's warning, not a reason to
+# stop the sandbox. The script lives on the noexec /tmp on purpose - that is
+# where the agent's scratchpad is, and `uv run <path>` must work from there.
+
+section "uv must run Python scripts"
+
+if ! command -v uv >/dev/null 2>&1; then
+  bad "uv is not on PATH - the agent's default scripting path is missing"
+else
+  info "$(uv --version 2>/dev/null)"
+  UV_PROBE=$(mktemp --suffix=.py)
+  printf '# /// script\n# dependencies = []\n# ///\nimport sys\nprint("uv-ok", sys.version_info[0])\n' > "$UV_PROBE"
+  UV_OUT=$(cd / && timeout "$MAX_TIME" uv run --offline --quiet --script "$UV_PROBE" 2>&1)
+  rm -f "$UV_PROBE"
+  if [ "$UV_OUT" = "uv-ok 3" ]; then
+    ok "uv run executes a script offline on the baked interpreter"
+  else
+    bad "uv run could not execute a stdlib script offline"
+    info "$(printf '%s' "$UV_OUT" | head -n 1 | cut -c1-160)"
+  fi
+
+  if [ "${UV_PYTHON_DOWNLOADS:-}" = "never" ]; then
+    ok "uv interpreter downloads are disabled (UV_PYTHON_DOWNLOADS=never)"
+  else
+    bad "UV_PYTHON_DOWNLOADS is '${UV_PYTHON_DOWNLOADS:-unset}', expected 'never'"
+    info "a missing interpreter would then fail as a firewall timeout instead of a clear error"
   fi
 fi
 

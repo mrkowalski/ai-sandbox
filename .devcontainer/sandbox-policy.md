@@ -1,4 +1,6 @@
-# Sandbox policy: commands that must be run outside the sandbox
+# Sandbox policy
+
+## Commands that must be run outside the sandbox
 
 You are running inside a locked-down container. Some commands cannot work in
 here, for either of two reasons:
@@ -63,3 +65,22 @@ something for the user to decide.
 
 A blocked command here is the sandbox working as designed, not a defect to
 route around.
+
+## Intermediate scripts
+
+When you write a script to do your own work - munging data, probing
+something, a one-off transform - write it in Python and run it with uv:
+
+- Run it as `uv run <path>`, never `./<path>` or `node <path>`. `/tmp` is
+  mounted `noexec`, so executing a script there directly exits 126; `uv run`
+  works from anywhere, the scratchpad included.
+- Declare third-party dependencies inline (a PEP 723 `# /// script` block) and
+  let `uv run` fetch them from PyPI. Do not `pip install` or create a venv for a
+  throwaway script.
+- For a Python CLI tool, use `uvx <tool>`. `uv tool install` and
+  `pip install --user` fail: the home directory is read-only.
+- Interpreters cannot be downloaded in here. Use the baked one; do not pin a
+  `requires-python` it does not satisfy.
+
+This is about your own helper scripts only. Code that belongs to the project
+uses the project's language and tooling, and a language the user asks for wins.

@@ -10,8 +10,9 @@ Five files enforce the sandbox; a change to any of them is a change to its guara
 - Makes the rootfs `--read-only`, with a `noexec` `/tmp` tmpfs.
 - Bind-mounts the project at its host path, then binds its `.git` back over itself **read-only**. This is the only thing stopping the agent writing the user's history. It applies to every process, whatever invoked it, and the guard's bypass does not affect it. Staging (`git add`, `stash`, `checkout -b`) fails too, by design; reads still work. `initializeCommand` pre-creates `.git` so a workspace with no repository does not end up with a root-owned one. Repos outside the workspace stay writable, and `verify.sh`'s scratch repo relies on that.
 - Pins `"overrideCommand": false`. Otherwise the CLI starts the container with `--entrypoint /bin/sh` and the firewall is never installed. This line, the image `ENTRYPOINT`, and the Dockerfile's keep-alive `CMD` only work together: remove any one and enforcement quietly stops happening.
-- Named volumes `claude-code-<kind>-${localEnv:SBX_SLUG}-${devcontainerId}` for bash history, Claude config, and npm cache. `${devcontainerId}` is the uniqueness key and must stay; without it, projects would share Claude credentials. The slug is only a readable label, and a launch without `SBX_SLUG` creates a stray `claude-code-<kind>--<id>` set.
+- Named volumes `claude-code-<kind>-${localEnv:SBX_SLUG}-${devcontainerId}` for bash history, Claude config, npm cache, and uv cache. `${devcontainerId}` is the uniqueness key and must stay; without it, projects would share Claude credentials. The slug is only a readable label, and a launch without `SBX_SLUG` creates a stray `claude-code-<kind>--<id>` set.
 - npm's cache at `/home/node/.npm` is a volume because on the read-only rootfs npm fails with `EROFS`. It cannot be a tmpfs because `npx` executes from the cache and tmpfs is `noexec`.
+- uv's cache at `/home/node/.cache/uv` is a volume for the same two reasons: `uv run` and `uvx` build environments in it and exec from them. Interpreters are baked into `/usr/local/share/uv/python` (read-only) and `UV_PYTHON_DOWNLOADS=never`, since their download host, GitHub, is blocked.
 - `postStartCommand` (`sudo init-firewall.sh && verify.sh`, `waitFor`) is a redundant second install plus the full network-probing check. **It is not enforcement**: it doesn't run on `docker start` or restarts, and a failure there doesn't stop an already-running container.
 
 ## 2. `entrypoint.sh` - the enforcement point
@@ -28,7 +29,7 @@ Saves Docker's `127.0.0.11` DNS NAT rules, sets all policies to DROP **before** 
 
 ## 5. `verify.sh`
 
-Checks the end state itself instead of trusting (4). Its checks are numbered 1-10 in its header: egress blocked, `git push` impossible with no credentials, Anthropic reachable, iptables in whitelist mode, entrypoint marker present, npm cache writable and exec-capable, volume names match this workspace, rootfs read-only, host-only guard working, `.git` read-only but readable.
+Checks the end state itself instead of trusting (4). Its checks are numbered 1-11 in its header: egress blocked (including github.com), `git push` impossible with no credentials, Anthropic reachable, iptables in whitelist mode, entrypoint marker present, npm and uv caches writable and exec-capable, volume names match this workspace, rootfs read-only, host-only guard working, `.git` read-only but readable, `uv run` works offline.
 
 `bad` = FAIL (exit 1, launch fails); `warn` = informational. Promoting a check to FAIL means any container that fails it can no longer start.
 
@@ -42,7 +43,7 @@ Before editing:
 - **PID 1** is context only: after `exec`, PID 1 looks identical whether or not the entrypoint ran. It does tell which command is running: a `sleep` loop that also has `exec "$@"` is the CLI's shim, which means `overrideCommand` is back on. `PID1_KEEPALIVE` must match the Dockerfile `CMD`.
 - **Host-only probes** run the guard in both directions and require it to fail closed on a missing list. `HOST_ONLY_SAMPLES` has one command per family (wrangler, git, `gh`); drop a sample only when you drop its family. `HOST_ONLY_ALLOWED` catches over-blocking. `git tag -l` is the key case there, because only `tag`'s mutating forms are declared.
 - **Read-only `.git`** (check 10) probes `git rev-parse --absolute-git-dir` (worktrees and submodules point elsewhere). It resolves from the workspace with no fallback to cwd, creates a new file rather than `touch`ing an existing one, and checks that reads still work. No repository reports N/A, never a silent pass.
-- **Writable mounts that tools execute from** need separate writability and exec probes. A `noexec` cache gets past `EROFS` but then fails with 126. The npm path comes from `npm config get cache`.
+- **Writable mounts that tools execute from** need separate writability and exec probes. A `noexec` cache gets past `EROFS` but then fails with 126. The npm path comes from `npm config get cache`, the uv path from `uv cache dir`; both go through `check_cache_dir`.
 
 ## 6. `host-only-commands.txt` + `host-only-guard.sh`
 

@@ -86,12 +86,13 @@ HOST_ONLY_GUARD_BYPASS=1 npx wrangler deploy
 
 ### Container volumes
 
-Each project gets three named volumes - bash history, Claude Code config, and an npm cache - named after the workspace path it was launched from, followed by the dev container id. Launching in `/home/marcin/tools/sandbox` produces:
+Each project gets four named volumes - bash history, Claude Code config, an npm cache, and a uv cache - named after the workspace path it was launched from, followed by the dev container id. Launching in `/home/marcin/tools/sandbox` produces:
 
 ```
 claude-code-bashhistory-home-marcin-tools-sandbox-<devcontainerId>
 claude-code-config-home-marcin-tools-sandbox-<devcontainerId>
 claude-code-npm-home-marcin-tools-sandbox-<devcontainerId>
+claude-code-uv-home-marcin-tools-sandbox-<devcontainerId>
 ```
 
 The slug is the absolute path with the leading `/` stripped, lowercased, and every character outside `[a-z0-9_.-]` replaced by `-`. It leads the name so a project's volumes sort together. The image is tagged from the slug alone, as `sbx-<slug>`.

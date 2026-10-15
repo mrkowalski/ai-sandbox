@@ -11,7 +11,7 @@
 ## Inside the sandbox (`$DEVCONTAINER=true`)
 
 - No `docker`, `podman`, or `devcontainer` CLI: cannot build, run, or rebuild the container.
-- Rootfs read-only. Writable: project folder (at its host path), `/tmp`, `/commandhistory`, `/home/node/.claude`, `/home/node/.npm`.
+- Rootfs read-only. Writable: project folder (at its host path), `/tmp`, `/commandhistory`, `/home/node/.claude`, `/home/node/.npm`, `/home/node/.cache/uv`.
 - Project `.git` is mounted read-only: commit, stage, stash, etc. fail by design.
 - `/tmp` is `noexec` tmpfs: anything executed from there exits 126.
 - `/usr/local/bin/*` are the image's baked copies. Editing `.devcontainer/*.sh` has no effect until a host-side rebuild.

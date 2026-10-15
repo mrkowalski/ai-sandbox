@@ -19,6 +19,16 @@ registry.npmjs.org
 statsig.com
 sentry.io
 
+## Python
+
+# PyPI: `uv run` inline dependencies. pypi.org serves the index,
+# files.pythonhosted.org the wheels and sdists. Interpreters are baked into the
+# image; their download host (github.com) stays blocked.
+# Caveat: the ipset holds IPs, and upload.pypi.org can share Fastly addresses
+# with pypi.org. Uploading needs a PyPI token, which the sandbox does not have.
+pypi.org
+files.pythonhosted.org
+
 ## CloudFlare docs
 
 developers.cloudflare.com

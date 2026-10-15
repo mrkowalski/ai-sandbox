@@ -1,6 +1,12 @@
+ARG UV_VERSION=0.9.0
+
+# Named stage so the version can come from an ARG; COPY --from cannot expand one.
+FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
+
 FROM node:24-trixie-slim
 
 ARG CLAUDE_CODE_VERSION=latest
+ARG PYTHON_VERSION=3.13
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   less \
@@ -81,6 +87,30 @@ COPY host-only-commands.txt /usr/local/etc/
 COPY managed-settings.json /etc/claude-code/
 COPY sandbox-policy.md /etc/claude-code/CLAUDE.md
 USER root
+
+# uv and a uv-managed Python, baked into the read-only rootfs. Interpreter
+# downloads come from GitHub, which the firewall blocks, so runtime downloads
+# are switched off (ENV below): a missing version then fails with a plain
+# "no interpreter" error instead of a network timeout. The cache is a volume
+# (devcontainer.json); the directory is pre-created so the first mount
+# inherits node's ownership. UV_LINK_MODE=copy because a project .venv sits on
+# the workspace bind mount, a different filesystem from the cache, where
+# hardlinking fails with a warning on every install.
+COPY --from=uv /uv /uvx /usr/local/bin/
+ENV UV_PYTHON_INSTALL_DIR=/usr/local/share/uv/python \
+    UV_PYTHON_BIN_DIR=/usr/local/bin
+RUN UV_CACHE_DIR=/root/.cache/uv-build uv python install "$PYTHON_VERSION" && \
+    ln -sf "$(uv python find "$PYTHON_VERSION")" /usr/local/bin/python3 && \
+    ln -sf python3 /usr/local/bin/python && \
+    rm -rf /root/.cache/uv-build && \
+    chmod -R a+rX /usr/local/share/uv && \
+    mkdir -p /home/node/.cache/uv && \
+    chown -R node:node /home/node/.cache
+ENV UV_PYTHON_DOWNLOADS=never \
+    UV_PYTHON_PREFERENCE=only-managed \
+    UV_CACHE_DIR=/home/node/.cache/uv \
+    UV_LINK_MODE=copy
+
 RUN echo 'export PATH="$PATH:/usr/local/share/npm-global/bin"' \
       > /etc/profile.d/npm-global-path.sh && \
     chmod 0644 /etc/profile.d/npm-global-path.sh && \

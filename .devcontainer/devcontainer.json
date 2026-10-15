@@ -18,6 +18,7 @@
     "source=claude-code-bashhistory-${localEnv:SBX_SLUG}-${devcontainerId},target=/commandhistory,type=volume",
     "source=claude-code-config-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.claude,type=volume",
     "source=claude-code-npm-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.npm,type=volume",
+    "source=claude-code-uv-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.cache/uv,type=volume",
     "source=${localWorkspaceFolder}/.git,target=${localWorkspaceFolder}/.git,type=bind,readonly"
   ],
   "containerEnv": {
