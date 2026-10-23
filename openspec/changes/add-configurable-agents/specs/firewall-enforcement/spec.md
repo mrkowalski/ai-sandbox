@@ -16,6 +16,15 @@ The firewall SHALL read its whitelist and host-network flag from a fixed path th
 - **WHEN** the container is started by a bare `devcontainer up` that supplies no policy mount
 - **THEN** firewall installation aborts on the unreadable whitelist, the container stops, and the log names the missing policy
 
+### Requirement: IPv4 whitelist entries are allowed as given
+
+The firewall SHALL add whitelist entries that are IPv4 addresses or CIDR ranges to the allowed set as given, without DNS resolution, and SHALL resolve every other entry as a hostname.
+
+#### Scenario: Whitelisted range
+
+- **WHEN** the effective whitelist contains `203.0.113.0/24`
+- **THEN** a connection to any address in that range is accepted, a connection to an address outside it and outside every other entry is rejected, and no DNS lookup is made for the entry
+
 ### Requirement: Docker-host network access is opt-in
 
 The firewall SHALL NOT accept traffic to or from the Docker host's network unless the resolved config sets `host-network = on`. Loopback and DNS SHALL stay allowed either way.
@@ -32,7 +41,7 @@ The firewall SHALL NOT accept traffic to or from the Docker host's network unles
 
 ### Requirement: Blocked-host probes never use an allowed host
 
-Verification's must-be-blocked probes SHALL skip any host present in the effective whitelist and use another known non-whitelisted host instead. It SHALL fail if no candidate remains.
+Verification's must-be-blocked probes SHALL skip any host present in the effective whitelist, or whose address falls in a whitelisted range, and use another known non-whitelisted host instead. It SHALL fail if no candidate remains.
 
 #### Scenario: Project allows a default probe host
 

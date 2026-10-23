@@ -31,7 +31,7 @@ Config SHALL carry only settings that widen what the sandbox can reach: `tools`,
 
 ### Requirement: Config is data, never code
 
-The launcher SHALL parse config files as `key = value` lines and SHALL NOT source or execute them. An unknown key, a malformed line, a tool with no fragment, or a value that fails validation SHALL abort the launch with a message naming the file and line.
+The launcher SHALL parse config files as `key = value` lines and SHALL NOT source or execute them. An unknown key, a malformed line, a tool with no bundle, or a value that fails validation SHALL abort the launch with a message naming the file and line.
 
 #### Scenario: Shell in a config value
 
@@ -40,12 +40,12 @@ The launcher SHALL parse config files as `key = value` lines and SHALL NOT sourc
 
 #### Scenario: Unknown tool
 
-- **WHEN** `.sbx/config` enables a tool for which this repo has no fragment
+- **WHEN** `.sbx/config` enables a tool for which this repo has no bundle
 - **THEN** the launch aborts and lists the tools that are available
 
 ### Requirement: A project config is approved before it takes effect
 
-The launcher SHALL show what the project config changes relative to the defaults: tools, domains, host-network, and mounts. It SHALL require interactive confirmation the first time it applies a project config and whenever that config's content changes. Without a terminal it SHALL refuse rather than apply an unapproved config.
+The launcher SHALL show what the project config changes relative to the defaults: tools, hosts and IPv4 ranges, host-network, and mounts. It SHALL require interactive confirmation the first time it applies a project config and whenever that config's content changes. Without a terminal it SHALL refuse rather than apply an unapproved config.
 
 #### Scenario: Cloned repository ships a config
 
@@ -73,7 +73,7 @@ When `.sbx/` exists in the workspace, it SHALL be mounted read-only inside the c
 
 ### Requirement: The effective whitelist is composed from config
 
-The effective whitelist SHALL be the defaults' `allow` entries, plus the domains of every enabled tool, plus the project's `allow` entries, minus its `deny` entries. A `deny` that removes a domain an enabled tool requires SHALL abort the launch.
+The effective whitelist SHALL be the defaults' `allow` entries, plus the hostnames and IPv4 ranges of every enabled tool, plus the project's `allow` entries, minus its `deny` entries. A `deny` that removes an entry an enabled tool requires SHALL abort the launch.
 
 #### Scenario: Enabling a tool brings its domains
 
@@ -84,6 +84,25 @@ The effective whitelist SHALL be the defaults' `allow` entries, plus the domains
 
 - **WHEN** a project enables `claude` and denies `api.anthropic.com`
 - **THEN** the launch aborts and names the tool that requires the domain
+
+### Requirement: Whitelist entries are hostnames or public IPv4 ranges
+
+Every `allow` and `deny` entry, and every entry a tool bundle requires, SHALL be either a hostname or a public IPv4 address or CIDR range no wider than /16. A private, loopback, link-local, shared-address (CGNAT), or multicast range SHALL be rejected: the Docker host is reached through `host-network` only.
+
+#### Scenario: Provider reached by address range
+
+- **WHEN** `.sbx/config` has `allow = 203.0.113.0/24`
+- **THEN** the approval prompt lists the range, and once approved, addresses in that range are reachable from inside the container
+
+#### Scenario: Range that would reach a private network
+
+- **WHEN** `.sbx/config` has `allow = 192.168.0.0/16`
+- **THEN** the launch aborts with an error naming the file and line and the private range
+
+#### Scenario: Range that is too wide
+
+- **WHEN** `.sbx/config` has `allow = 8.0.0.0/8`
+- **THEN** the launch aborts with an error naming the file and line and the /16 limit
 
 ### Requirement: Extra host folders are opt-in and read-only by default
 

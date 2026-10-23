@@ -2,13 +2,13 @@
 
 ## Purpose
 
-Defines the one host command that brings a project's sandbox up and runs any command in it. That command replaces the per-agent shell functions.
+Defines the one host command that brings a project's sandbox up and runs any command in it, and the entry point that serves any enabled agent over ACP. They replace the per-agent shell functions.
 
 ## ADDED Requirements
 
 ### Requirement: sbx runs the given command verbatim
 
-`sbx [--rebuild] [--up] [--] <cmd> [args...]` SHALL bring the sandbox up for the current folder if needed. It SHALL then run `<cmd>` with exactly the given arguments inside it, attached to the terminal. Its exit status SHALL be the command's. Options are recognized only before the command or `--`. There SHALL be no default command.
+`sbx [--rebuild] [--up] [--] <cmd> [args...]` SHALL bring the sandbox up for the current folder if needed. It SHALL then run `<cmd>` with exactly the given arguments inside it, attached to the terminal. Its exit status SHALL be the command's. Options are recognized only before the command or `--`. There SHALL be no default command. Everything `sbx` prints itself SHALL go to stderr, so that stdout carries only the command's output.
 
 #### Scenario: Agent with arguments
 
@@ -29,6 +29,20 @@ Defines the one host command that brings a project's sandbox up and runs any com
 
 - **WHEN** the user runs `sbx -- --rebuild`
 - **THEN** `--rebuild` is run as the command, not interpreted by the launcher
+
+### Requirement: Any enabled agent can be launched as an ACP server
+
+`sbx-acp.sh <tool>` SHALL bring the sandbox up for the current folder through `sbx` and run that tool's declared ACP command in it, with the caller's stdin and stdout connected to the agent. It SHALL refuse, with a message on stderr and before running anything, a missing tool name, a tool that is not an agent, and an agent the resolved config does not enable.
+
+#### Scenario: Editor starts opencode
+
+- **WHEN** an editor runs `sbx-acp.sh opencode` in an approved project that enables `opencode`
+- **THEN** `opencode acp` serves the session from inside the sandbox, and the stream on stdout contains nothing but the agent's output
+
+#### Scenario: Agent not enabled
+
+- **WHEN** an editor runs `sbx-acp.sh opencode` in a project that enables only `claude`
+- **THEN** it fails without starting a command and names the enabled agents (`claude`)
 
 ### Requirement: The container can be brought up without running anything
 

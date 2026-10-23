@@ -2,27 +2,46 @@
 
 ## Purpose
 
-Lets the sandbox host many tools, such as coding agents, without installing all of them everywhere. Each project's image contains only the tools that project enables, and every tool runs under the same tool-neutral enforcement.
+Lets the sandbox host many tools, such as coding agents, without installing all of them everywhere. Each tool comes as one bundle carrying everything it needs, each project's image contains only the tools that project enables, every agent can be driven over ACP, and every tool runs under the same tool-neutral enforcement.
 
 ## ADDED Requirements
 
 ### Requirement: Enforcement is tool-neutral
 
-The firewall, read-only rootfs, read-only `.git` and `.sbx`, entrypoint gate, and verification suite SHALL be part of a base that every image shares. No tool fragment SHALL be able to remove or weaken them.
+The firewall, read-only rootfs, read-only `.git` and `.sbx`, entrypoint gate, and verification suite SHALL be part of a base that every image shares. No tool bundle SHALL be able to remove or weaken them.
 
 #### Scenario: An image with no Claude Code
 
 - **WHEN** a project enables only `opencode`
 - **THEN** the container installs the firewall at start, mounts `.git` read-only, and verification prints `VERIFIED` exactly as it does for a Claude Code image
 
-### Requirement: Tools are self-contained fragments
+### Requirement: Tools are self-contained bundles
 
-Each tool SHALL be defined by one directory in this repo. That directory declares the tool's install step, the binaries it provides, the egress domains it requires, its state directories, and its reachability probe. A fragment SHALL NOT declare a start command. Adding a tool SHALL NOT require editing the base or any other tool.
+Each tool SHALL be defined by one bundle directory, enabled as a unit when a config lists the tool. The bundle declares its install step, baked config files, scripts, and hooks, binaries, required hostnames and IPv4 ranges, persistent state directories, other writable directories, and reachability probe. It SHALL NOT declare a start command. Adding a tool SHALL NOT require editing the base or any other tool.
 
 #### Scenario: Adding a new tool
 
 - **WHEN** a maintainer adds a directory for a new tool and a project enables it
 - **THEN** that project's next launch builds an image containing it, with no edits to the base Dockerfile, the firewall, or other tools
+
+#### Scenario: A tool that needs writable directories
+
+- **WHEN** a bundle declares directories outside the workspace as persistent state or as scratch space
+- **THEN** the tool can write there, and the rest of the rootfs, including that tool's binaries and baked settings, stays read-only
+
+#### Scenario: A bundle brings its own hook
+
+- **WHEN** a project enables `opencode`
+- **THEN** opencode's baked config and guard plugin are in effect with no project file, and disabling `opencode` removes them with it
+
+### Requirement: Bundles come only from this repo
+
+A project config SHALL select bundles from this repo and SHALL NOT supply one, so that no file from a mounted or cloned project is built into the image.
+
+#### Scenario: A project ships its own bundle
+
+- **WHEN** a project contains `.sbx/tools/<name>/` and enables `<name>`, for which this repo has no bundle
+- **THEN** nothing from that directory is built into the image, and the launch aborts as an unknown tool
 
 ### Requirement: An image contains only the enabled tools
 
@@ -45,7 +64,7 @@ The image a project runs SHALL contain the binaries of the tools its resolved co
 
 ### Requirement: Tools bake in their sandbox defaults
 
-A tool fragment SHALL be able to install, from outside the workspace, the settings that make the plain binary behave correctly in the sandbox, so that running a tool needs no sandbox-specific arguments.
+A tool bundle SHALL be able to install, from outside the workspace, the settings that make the plain binary behave correctly in the sandbox, so that running a tool needs no sandbox-specific arguments.
 
 #### Scenario: Claude without flags
 
@@ -75,6 +94,20 @@ Each enabled tool's declared state directories SHALL be backed by named volumes 
 - **WHEN** a tool is removed from a project's config and later added back
 - **THEN** its earlier state volume is mounted again rather than a fresh one
 
+### Requirement: Every coding agent is reachable over ACP
+
+Every coding-agent bundle SHALL declare the command that serves the agent over the Agent Client Protocol on stdio, and that command SHALL be installed with the agent. ACP SHALL NOT be a separate opt-in: enabling an agent enables its ACP server. A bundle that declares itself an agent without an ACP command SHALL be rejected when the config is resolved.
+
+#### Scenario: Any enabled agent from an IDE
+
+- **WHEN** a project enables `claude opencode`
+- **THEN** an editor can start either agent as an ACP server inside the project's sandbox
+
+#### Scenario: Agent bundle without ACP
+
+- **WHEN** a bundle declares itself an agent and declares no ACP command
+- **THEN** the launch aborts and names that bundle's `tool.conf`
+
 ### Requirement: Every coding agent receives the sandbox policy
 
 Each coding-agent tool SHALL be configured, from a location outside the workspace, to load the sandbox policy text: the host-only commands and the intermediate-scripts guidance.
@@ -86,7 +119,7 @@ Each coding-agent tool SHALL be configured, from a location outside the workspac
 
 ### Requirement: Verification follows the installed tools
 
-Verification SHALL derive the tools it checks from the image itself. For each installed tool it SHALL assert that its declared binaries are on `PATH`, that its state volumes are mounted under the expected names, and that its declared endpoint is reachable.
+Verification SHALL derive the tools it checks from the image itself. For each installed tool it SHALL assert that its declared binaries, and an agent's ACP command, are on `PATH`, that its state volumes are mounted under the expected names, that its declared scratch directories are writable, and that its declared endpoint is reachable.
 
 #### Scenario: Tool endpoint unreachable
 
