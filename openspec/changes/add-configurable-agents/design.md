@@ -99,6 +99,7 @@ Everything `sbx` prints itself goes to stderr, so stdout carries only the comman
 The generated config is the static `.devcontainer/devcontainer.json` merged with `jq`, so `jq` is a host requirement checked like docker and the devcontainer CLI. It is the static one with:
 - `build` replaced by `"image": "sbx-img:<hash>"`
 - `--label=sbx.config=<hash>` added to `runArgs`
+- `--name=sbx-<slug>` added to `runArgs`. The name has no `devcontainerId`, so it stays readable. A slug collision makes Docker refuse the name, and `sbx` reports this rather than removing the other container.
 - the base volumes under the `sbx-` prefix, and the tool volumes, tmpfs mounts, and env
 - a read-only bind of the policy dir at `/usr/local/etc/sbx`
 - a read-only bind of `<workspace>/.sbx` when it exists
@@ -131,3 +132,4 @@ The generated config is the static `.devcontainer/devcontainer.json` merged with
 - [The approval gate is trust-on-first-use, so a user who confirms without reading widens the sandbox] → the prompt lists every added host, range, and mount explicitly, and defaults to No.
 - [Shipped defaults with no tools make the first `sbx claude` in a new project fail with command-not-found] → this is intended. The README shows the one-line `.sbx/config` and the option to add `claude` to the defaults file.
 - [Image count grows with distinct tool combinations] → base layers are shared. Prune old images with `docker images sbx-img`, which the README covers.
+- [`verify.sh` cannot check the container name, because there is no Docker socket inside] → it is a host-side label, not a capability, so it gets no `verify.sh` assertion. Task 5.1 checks it on the host.

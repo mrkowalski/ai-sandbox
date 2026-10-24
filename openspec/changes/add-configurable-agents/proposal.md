@@ -22,7 +22,7 @@ Every coding agent is baked into the single sandbox image, and starting one need
 
 ### Modified Capabilities
 - `firewall-enforcement`: the policy comes only from the host-resolved read-only mount, IPv4 entries are allowed as given, host-network access is opt-in, and blocked-host probes never use an allowed host.
-- `docker-resource-naming`: the volume set depends on the enabled tools, and volumes take the `sbx-` prefix instead of `claude-code-`. Images get a shared content tag alongside the per-project tag.
+- `docker-resource-naming`: the volume set depends on the enabled tools, and volumes take the `sbx-` prefix instead of `claude-code-`. Images get a shared content tag alongside the per-project tag. The container is named `sbx-<slug>` instead of getting a random Docker name.
 - `host-only-commands`: the guard applies to every agent that offers a pre-execution hook (Claude Code's hook, opencode's plugin), all matching one shared list. Agents without such a hook receive the policy text only.
 
 ## Impact

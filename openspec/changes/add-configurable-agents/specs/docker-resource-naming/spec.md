@@ -75,3 +75,24 @@ Verification SHALL assert, whenever the verification suite runs, that each mount
 
 - **WHEN** a tool installed in the image has a declared state directory that is not backed by a named volume
 - **THEN** verification reports a failure naming the tool and the directory
+
+## ADDED Requirements
+
+### Requirement: The container carries the same name
+
+The sandbox container SHALL be named `sbx-` followed by the workspace-path component used for the volumes, so that `docker ps` shows which project each container serves. The name is a label only: isolation still rests on the volumes' uniqueness key. When two workspace paths derive the same component and one project's container already exists, the launch SHALL fail and name the existing container rather than reuse or replace it.
+
+#### Scenario: The container is identifiable after launch
+
+- **WHEN** a sandbox launch completes for workspace `/home/<user>/tools/sandbox`
+- **THEN** `docker ps` lists its container as `sbx-home-<user>-tools-sandbox`
+
+#### Scenario: Recreating keeps the name
+
+- **WHEN** `sbx` recreates the container after a config change or `--rebuild`
+- **THEN** the new container has the same name, and the project has exactly one container
+
+#### Scenario: Two paths that derive the same name
+
+- **WHEN** `/home/<user>/a b` already has a container and the sandbox is launched in `/home/<user>/a-b`
+- **THEN** the launch fails and names `sbx-home-<user>-a-b` as the existing container, and the other project's container keeps running
