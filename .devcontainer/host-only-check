@@ -1,42 +1,36 @@
 #!/bin/bash
 #
-# host-only-guard.sh - stops the sandbox agent running commands that cannot work here.
+# host-only-check - decide whether a command must be run outside the sandbox.
 #
 # Guarantees:
-#   - a Bash command matching an entry in /usr/local/etc/host-only-commands.txt
-#     never executes inside the container;
-#   - the agent is handed that entry's explanation and host-side remedy, plus
-#     the exact command it tried, instead of an opaque network or auth failure;
-#   - a command matching no entry is passed through untouched and silently.
+#   - a command matching an entry in /usr/local/etc/host-only-commands.txt
+#     exits 2, with that entry's explanation and host-side remedy, plus the
+#     exact command, on stderr;
+#   - a command matching no entry exits 0, silently;
+#   - a missing, unreadable, or malformed list exits 2 for every command
+#     (fails closed), naming the problem.
+#
+# This is the one matcher every agent's guard uses. Each agent adapter (Claude
+# Code's PreToolUse hook, opencode's tool.execute.before plugin) only unwraps
+# its own payload and hands the command string here, so the list and the
+# matching cannot drift apart between agents.
 #
 # This is NOT a containment mechanism. The firewall and the read-only rootfs
-# contain the agent; a listed command stays blocked at the network layer
-# whether or not this guard runs. The guard's job is to turn a confusing
-# failure into a clear handoff, so it is deliberately easy to bypass on
-# purpose (HOST_ONLY_GUARD_BYPASS=1) and makes no attempt to defeat an agent
-# that is trying to evade it.
-#
-# Invocation: registered as a PreToolUse hook for the Bash tool in the managed
-# settings baked into the image. Claude Code writes the tool-input JSON to
-# stdin. Exit 0 allows the call; exit 2 blocks it and feeds stderr back to the
-# model. Exit 2 is used rather than a JSON permissionDecision because it is the
-# oldest and least version-dependent PreToolUse blocking contract, and because
-# it does not go through the permission system at all - the container runs with
-# --dangerously-skip-permissions, so anything the permission mode can switch
-# off is not a mechanism here.
-#
-# Also runnable standalone, which is how verify.sh probes it:
-#   echo '{"tool_name":"Bash","tool_input":{"command":"npx wrangler login"}}' | host-only-guard.sh
+# contain the agent; a listed command stays blocked at the network layer or by
+# the read-only .git mount whether or not this runs. Its job is to turn a
+# confusing failure into a clear handoff, so it is deliberately easy to bypass
+# (HOST_ONLY_GUARD_BYPASS=1) and makes no attempt to defeat an agent that is
+# trying to evade it.
 #
 # Usage:
-#   host-only-guard.sh              read a hook payload on stdin; exit 0 or 2
-#   host-only-guard.sh --check-list validate the list only; exit 0 or 1
+#   host-only-check '<command>'   exit 0 (allowed) or 2 (host-only, or bad list)
+#   host-only-check --check-list  validate the list only; exit 0 or 1
 #
 # Environment:
 #   HOST_ONLY_COMMANDS       override the list path (verify.sh uses this to
 #                            probe parse failures without touching the real one)
-#   HOST_ONLY_GUARD_BYPASS   see below; read out of the *command*, not the
-#                            environment, so it applies to one invocation only
+#   HOST_ONLY_GUARD_BYPASS   read out of the *command*, not the environment, so
+#                            it applies to one invocation only
 
 set -euo pipefail
 export LC_ALL=C
@@ -84,9 +78,8 @@ BEGIN { skip = 0 }
 # ------------------------------------------------------------------ list ----
 #
 # Parsing is strict on purpose. An unreadable or malformed policy must not
-# degrade into "nothing is host-only" - that is the failure mode this whole
-# change exists to remove - so every problem here aborts rather than warns,
-# matching init-firewall.sh aborting on a domain it cannot resolve.
+# degrade into "nothing is host-only", so every problem here aborts rather than
+# warns, matching init-firewall.sh aborting on a domain it cannot resolve.
 
 # grep exits 1 for "no match" and 2 for a bad regex; only 2 means the pattern
 # itself is broken. `|| rc=$?` keeps set -e out of it.
@@ -103,11 +96,11 @@ load_list() {
   local line pat text lineno=0 problems=0
 
   if [ ! -f "$LIST" ]; then
-    printf 'host-only-guard: list not found: %s\n' "$LIST" >&2
+    printf 'host-only-check: list not found: %s\n' "$LIST" >&2
     return 1
   fi
   if [ ! -r "$LIST" ]; then
-    printf 'host-only-guard: list is not readable: %s\n' "$LIST" >&2
+    printf 'host-only-check: list is not readable: %s\n' "$LIST" >&2
     return 1
   fi
 
@@ -120,25 +113,24 @@ load_list() {
     [ -n "${line//[[:space:]]/}" ] || continue
 
     if [ "$line" = "${line%" :: "*}" ]; then
-      printf 'host-only-guard: %s:%d: no " :: " separator\n' "$LIST" "$lineno" >&2
+      printf 'host-only-check: %s:%d: no " :: " separator\n' "$LIST" "$lineno" >&2
       problems=$((problems + 1))
       continue
     fi
 
     pat="${line%%" :: "*}"
     text="${line#*" :: "}"
-    # Trim surrounding whitespace from both halves.
     pat="$(printf '%s' "$pat" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
     text="$(printf '%s' "$text" | sed -E 's/^[[:space:]]+//; s/[[:space:]]+$//')"
 
     if [ -z "$pat" ] || [ -z "$text" ]; then
-      printf 'host-only-guard: %s:%d: pattern or remedy text is empty\n' "$LIST" "$lineno" >&2
+      printf 'host-only-check: %s:%d: pattern or remedy text is empty\n' "$LIST" "$lineno" >&2
       problems=$((problems + 1))
       continue
     fi
 
     if ! is_valid_ere "$pat"; then
-      printf 'host-only-guard: %s:%d: not a valid POSIX ERE: %s\n' "$LIST" "$lineno" "$pat" >&2
+      printf 'host-only-check: %s:%d: not a valid POSIX ERE: %s\n' "$LIST" "$lineno" "$pat" >&2
       problems=$((problems + 1))
       continue
     fi
@@ -148,13 +140,13 @@ load_list() {
   done < "$LIST"
 
   if [ "$problems" -gt 0 ]; then
-    printf 'host-only-guard: %d malformed entr%s in %s\n' \
+    printf 'host-only-check: %d malformed entr%s in %s\n' \
       "$problems" "$([ "$problems" -eq 1 ] && echo y || echo ies)" "$LIST" >&2
     return 1
   fi
 
   if [ "${#PATTERNS[@]}" -eq 0 ]; then
-    printf 'host-only-guard: %s declares no entries\n' "$LIST" >&2
+    printf 'host-only-check: %s declares no entries\n' "$LIST" >&2
     return 1
   fi
 
@@ -174,55 +166,24 @@ normalize() {
 
 # ----------------------------------------------------------------- modes ----
 
-if [ "${1:-}" = "--check-list" ]; then
-  load_list || exit 1
-  printf 'host-only-guard: %s parses (%d entries)\n' "$LIST" "${#PATTERNS[@]}"
-  exit 0
-fi
-
-if [ $# -gt 0 ]; then
-  printf 'host-only-guard: unknown argument: %s\n' "$1" >&2
-  exit 1
-fi
-
-# ------------------------------------------------------------------ hook ----
-
-PAYLOAD="$(cat)"
-
-# Nothing to inspect: allow. An empty payload is not a policy failure.
-[ -n "${PAYLOAD//[[:space:]]/}" ] || exit 0
-
-TOOL=""
-COMMAND=""
-# Two separate extractions rather than one @tsv: @tsv escapes newlines as a
-# literal backslash-n, which would hide the structure of a multi-line command
-# (heredocs above all) from the normalizer below.
-if TOOL="$(printf '%s' "$PAYLOAD" | jq -r '.tool_name // ""' 2>/dev/null)"; then
-  COMMAND="$(printf '%s' "$PAYLOAD" | jq -r '.tool_input.command // ""' 2>/dev/null || true)"
-else
-  # The payload did not parse. Failing open would silently disable the policy,
-  # so refuse - but keep the escape hatch alive by looking for the bypass token
-  # in the raw text, otherwise a payload-format change would brick the session
-  # with no way out short of a host-side rebuild.
-  if printf '%s' "$PAYLOAD" | grep -q "$BYPASS_VAR="; then
-    printf 'host-only-guard: payload unparseable; %s found, allowing.\n' "$BYPASS_VAR" >&2
-    exit 0
-  fi
-  printf 'host-only-guard: could not parse the hook payload, so the host-only\n' >&2
-  printf 'policy cannot be applied. Refusing the command rather than ignoring\n' >&2
-  printf 'the policy. Prefix the command with %s=1 to run it anyway,\n' "$BYPASS_VAR" >&2
-  printf 'and report this - the guard needs updating on the host.\n' >&2
+if [ "$#" -ne 1 ]; then
+  printf 'usage: host-only-check <command> | --check-list\n' >&2
   exit 2
 fi
 
-# The hook is registered for Bash, but be explicit rather than assume.
-[ "$TOOL" = "Bash" ] || exit 0
+if [ "$1" = "--check-list" ]; then
+  load_list || exit 1
+  printf 'host-only-check: %s parses (%d entries)\n' "$LIST" "${#PATTERNS[@]}"
+  exit 0
+fi
+
+COMMAND="$1"
 [ -n "${COMMAND//[[:space:]]/}" ] || exit 0
 
 # Deliberate single-invocation bypass. Read out of the command string, not the
 # environment, so it cannot leak into later commands in the session.
 if printf '%s' "$COMMAND" | grep -Eq "(^|[[:space:]])$BYPASS_VAR="; then
-  printf 'host-only-guard: %s set - guard bypassed for this command.\n' "$BYPASS_VAR" >&2
+  printf 'host-only-check: %s set - guard bypassed for this command.\n' "$BYPASS_VAR" >&2
   exit 0
 fi
 

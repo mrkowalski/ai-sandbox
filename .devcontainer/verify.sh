@@ -1,16 +1,24 @@
 #!/bin/bash
 #
-# verify.sh - post-start verification for the Claude Code sandbox.
+# verify.sh - post-start verification for the sandbox.
+#
+# Expectations come from the image and the mounted policy, not from this
+# file: the installed tools from /usr/local/share/sbx/tools.list and each
+# bundle's tool.conf, the whitelist and host-network flag from the read-only
+# /usr/local/etc/sbx the launcher binds in.
 #
 # Asserts that the egress firewall installed by init-firewall.sh is actually
 # doing its job:
 #
-#   1. example.com is unreachable over both HTTP and HTTPS, and github.com
-#      (where uv would fetch interpreters) is unreachable too
+#   1. A host outside the whitelist (the first of example.com, example.org,
+#      ... that is neither listed nor covered by a whitelisted address or
+#      range) is unreachable over HTTP and HTTPS, and github.com (where uv
+#      would fetch interpreters) is too unless the config allows it
 #   2. `git push` is impossible over SSH and over HTTPS, and there is no SSH
 #      key, forwarded agent, or credential helper to attempt it with
-#   3. The Anthropic endpoints Claude Code needs are reachable
-#   4. iptables is in whitelist mode (OUTPUT policy is DROP)
+#   3. Each installed tool's declared `probe` endpoint is reachable
+#   4. iptables is in whitelist mode (OUTPUT policy is DROP), and the Docker
+#      host's /24 is accepted exactly when firewall.conf has HOST_NETWORK=1
 #   5. Firewall installation was anchored to this container start, so a
 #      restart cannot bring the container back unprotected
 #
@@ -18,22 +26,24 @@
 # and no more:
 #
 #   6. npm's and uv's cache directories are writable *and* exec-capable
-#   7. The four named volumes are named for this workspace: each one is
-#      `claude-code-<kind>-<slug>-<devcontainerId>`, with the slug re-derived
+#   7. The base volumes and every installed tool's state volumes are named for
+#      this workspace: `sbx-<kind>-<slug>-<devcontainerId>` and
+#      `sbx-<tool>-<kind>-<slug>-<devcontainerId>`, with the slug re-derived
 #      inside the container from SBX_WORKSPACE. This one is a FAIL rather than
 #      a WARN even though ${devcontainerId} keeps the volumes isolated whatever
 #      the name says. What fails here is the launcher: a container whose
 #      volumes do not carry its own workspace name was started by something
 #      that does not know the naming rule, and the volumes it would use are a
-#      second, stray set the wrappers will never mount again. Loud over quiet,
-#      like the rest of this file.
+#      second, stray set `sbx` will never mount again. Loud over quiet, like
+#      the rest of this file.
 #   8. The rootfs outside those mounts is still read-only
 #
 # and that the sandbox tells the agent which commands cannot work in here,
 # rather than leaving it to find out by running them:
 #
-#   9. The host-only command list is installed, and the guard that enforces
-#      it blocks a declared command and passes an ordinary one
+#   9. The host-only command list is installed, the shared matcher blocks a
+#      declared command and passes an ordinary one, and each installed agent's
+#      guard adapter is wired to it
 #
 # and that the mounted project's git history is the host's to write, not the
 # agent's:
@@ -44,6 +54,18 @@
 # and that Python runs the way the agent is told to run it:
 #
 #  11. `uv run` runs a script offline on the interpreter baked into the image
+#
+# and that the installed tool bundles are what their tool.conf declares:
+#
+#  12. Each tool's `bin` entries, and each agent's `acp` command, are on PATH
+#      from a read-only package dir; each bundle script resolves to the
+#      read-only /usr/local/share/sbx/bin
+#  13. Each tool's `tmpfs` directories are writable and noexec
+#
+# and that the config governing the container cannot be changed from inside:
+#
+#  14. The workspace's .sbx (when present) and /usr/local/etc/sbx are
+#      read-only, and the policy is a host bind outside the workspace
 #
 # Prints "VERIFIED" and exits 0 when every required check passes, otherwise
 # prints a summary of the failures and exits 1.
@@ -99,6 +121,37 @@ elif sudo -n iptables -S OUTPUT >/dev/null 2>&1; then
   IPT="sudo -n iptables"
   sudo -n ipset list -n >/dev/null 2>&1 && IPSET="sudo -n ipset"
 fi
+
+# ------------------------------------------------------- config and tools ----
+
+SBX_ETC=/usr/local/etc/sbx
+WHITELIST_FILE="$SBX_ETC/allowed-domains.txt"
+FIREWALL_CONF="$SBX_ETC/firewall.conf"
+SBX_SHARE=/usr/local/share/sbx
+TOOLS_LIST="$SBX_SHARE/tools.list"
+
+# conf_values <tool.conf> <key> - every value of <key>, one per line. Same
+# reading as install-tools.sh; the host launcher validated the file.
+conf_values() {
+  local file="$1" want="$2" line key value
+  [ -r "$file" ] || return 0
+  while IFS= read -r line || [ -n "$line" ]; do
+    line="${line%%[[:space:]]#*}"
+    [[ "$line" =~ ^[[:space:]]*([a-z][a-z-]*)[[:space:]]*=[[:space:]]*(.*[^[:space:]])[[:space:]]*$ ]] || continue
+    key="${BASH_REMATCH[1]}" value="${BASH_REMATCH[2]}"
+    [ "$key" = "$want" ] && printf '%s\n' "$value"
+  done < "$file"
+  return 0
+}
+
+tool_conf() { printf '%s/tools/%s/tool.conf' "$SBX_SHARE" "$1"; }
+
+INSTALLED_TOOLS=()
+[ -r "$TOOLS_LIST" ] && mapfile -t INSTALLED_TOOLS < <(grep -v '^[[:space:]]*$' "$TOOLS_LIST")
+
+host_network_flag() {
+  if [ -r "$FIREWALL_CONF" ] && grep -qx 'HOST_NETWORK=1' "$FIREWALL_CONF"; then echo 1; else echo 0; fi
+}
 
 # ---------------------------------------------------------- curl helpers ----
 #
@@ -162,7 +215,7 @@ check_reachable() {
   fi
 
   if [ "$mode" = "required" ]; then
-    bad "$label is NOT reachable (curl exit $PROBE_RC) - Claude Code needs this host"
+    bad "$label is NOT reachable (curl exit $PROBE_RC) - the tool needs this host"
   else
     warn "$label is not reachable (curl exit $PROBE_RC)"
   fi
@@ -288,6 +341,25 @@ check_iptables() {
     warn "no catch-all REJECT rule in OUTPUT (relying on the chain policy alone)"
   fi
 
+  # The Docker host's /24 is opt-in through the config's host-network. The
+  # flag comes from the same read-only mount init-firewall.sh read it from.
+  local flag host_rules host_ip subnet
+  flag=$(host_network_flag)
+  host_rules=$(grep -E -- '^-A OUTPUT -d [0-9.]+/24 -j ACCEPT$' <<<"$output_rules" || true)
+  if [ "$flag" = 1 ]; then
+    host_ip=$(ip route | awk '/^default/ { print $3; exit }')
+    subnet="${host_ip%.*}.0/24"
+    if [ -n "$host_ip" ] && grep -qxF -- "-A OUTPUT -d $subnet -j ACCEPT" <<<"$output_rules"; then
+      ok "OUTPUT accepts the Docker host network $subnet (host-network = on)"
+    else
+      bad "host-network is on but OUTPUT has no ACCEPT rule for the Docker host network ${subnet:-<unknown>}"
+    fi
+  elif [ -z "$host_rules" ]; then
+    ok "no ACCEPT rule for the Docker host network (host-network off)"
+  else
+    bad "OUTPUT accepts a /24 although host-network is off: $(tr '\n' ' ' <<<"$host_rules")"
+  fi
+
   if [ -n "$IPSET" ]; then
     local n
     n=$($IPSET list allowed-domains 2>/dev/null | grep -cE '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+')
@@ -315,30 +387,93 @@ fi
 # Main
 # ============================================================================
 
-printf '%s%sClaude Code sandbox verification%s\n' "$C_B" "$C_C" "$C_0"
+printf '%s%ssandbox verification%s\n' "$C_B" "$C_C" "$C_0"
 printf 'host: %s   user: %s   date: %s\n' "$(hostname)" "$(id -un)" "$(date -Is)"
 
 # ---------------------------------------------------------------------------
 # Check 1: arbitrary internet egress is blocked
 # ---------------------------------------------------------------------------
-section "Blocked egress (example.com and github.com must be unreachable)"
+section "Blocked egress (a host outside the whitelist must be unreachable)"
 
-check_unreachable "http://example.com"  "example.com over HTTP (port 80)"
-check_unreachable "https://example.com" "example.com over HTTPS (port 443)"
+# A probe host the config allows would be reported as a leak, so candidates in
+# the whitelist, or whose addresses a whitelisted name or range covers, are
+# skipped. Whitelisted names are resolved here too because the ipset holds
+# addresses: a candidate sharing a CDN address with an allowed host is
+# reachable without being a leak.
+ip2int() {
+  local IFS=. a b c d
+  read -r a b c d <<<"$1"
+  echo $(( (a << 24) | (b << 16) | (c << 8) | d ))
+}
 
-# Probe the resolved address directly as well, so that a DNS quirk cannot make
-# the checks above pass for the wrong reason. Plain HTTP with an explicit Host
-# header keeps TLS out of the picture.
-EXAMPLE_IP=$(getent ahostsv4 example.com 2>/dev/null | awk 'NR == 1 { print $1 }')
-if [ -n "$EXAMPLE_IP" ]; then
-  check_unreachable "http://$EXAMPLE_IP/" "example.com by IP ($EXAMPLE_IP:80)" -H "Host: example.com"
+WL_ENTRIES=() WL_NETS=() WL_IPS=()
+if [ -r "$WHITELIST_FILE" ]; then
+  mapfile -t WL_ENTRIES < <(sed -e 's/#.*//' -e 's/[[:space:]]//g' "$WHITELIST_FILE" | grep -v '^$')
+  for e in "${WL_ENTRIES[@]}"; do
+    if [[ "$e" =~ ^[0-9.]+(/[0-9]+)?$ ]]; then
+      [[ "$e" == */* ]] || e="$e/32"
+      WL_NETS+=("$e")
+    else
+      while read -r ip; do WL_IPS+=("$ip"); done < <(getent ahostsv4 "$e" 2>/dev/null | awk '{ print $1 }' | sort -u)
+    fi
+  done
 else
-  info "example.com did not resolve; skipping the by-IP probe"
+  bad "cannot read the whitelist $WHITELIST_FILE - the probe hosts cannot be chosen"
 fi
 
-# PyPI is whitelisted but the interpreter downloads uv would otherwise attempt
-# are served from GitHub. Pinning that shut keeps interpreters baked-only.
-check_unreachable "https://github.com" "github.com over HTTPS (interpreter downloads)"
+# host_allowed <host> - 0 when the whitelist lets <host> through.
+host_allowed() {
+  local h="$1" ip n net bits mask
+  for e in "${WL_ENTRIES[@]}"; do [ "$e" = "$h" ] && return 0; done
+  while read -r ip; do
+    [ -n "$ip" ] || continue
+    for e in "${WL_IPS[@]}"; do [ "$e" = "$ip" ] && return 0; done
+    n=$(ip2int "$ip")
+    for net in "${WL_NETS[@]}"; do
+      bits="${net#*/}"
+      mask=$(( (0xFFFFFFFF << (32 - bits)) & 0xFFFFFFFF ))
+      [ $(( n & mask )) -eq $(( $(ip2int "${net%/*}") & mask )) ] && return 0
+    done
+  done < <(getent ahostsv4 "$h" 2>/dev/null | awk '{ print $1 }' | sort -u)
+  return 1
+}
+
+PROBE_CANDIDATES=(example.com example.org example.net iana.org wikipedia.org)
+PROBE_HOST=""
+for h in "${PROBE_CANDIDATES[@]}"; do
+  if host_allowed "$h"; then
+    info "$h is allowed by the whitelist; not used as a blocked-egress probe"
+  else
+    PROBE_HOST="$h"
+    break
+  fi
+done
+
+if [ -z "$PROBE_HOST" ]; then
+  bad "every blocked-egress probe candidate is whitelisted (${PROBE_CANDIDATES[*]}) - egress blocking cannot be proven"
+else
+  check_unreachable "http://$PROBE_HOST"  "$PROBE_HOST over HTTP (port 80)"
+  check_unreachable "https://$PROBE_HOST" "$PROBE_HOST over HTTPS (port 443)"
+
+  # Probe the resolved address directly as well, so that a DNS quirk cannot
+  # make the checks above pass for the wrong reason. Plain HTTP with an
+  # explicit Host header keeps TLS out of the picture.
+  PROBE_IP=$(getent ahostsv4 "$PROBE_HOST" 2>/dev/null | awk 'NR == 1 { print $1 }')
+  if [ -n "$PROBE_IP" ]; then
+    check_unreachable "http://$PROBE_IP/" "$PROBE_HOST by IP ($PROBE_IP:80)" -H "Host: $PROBE_HOST"
+  else
+    info "$PROBE_HOST did not resolve; skipping the by-IP probe"
+  fi
+fi
+
+# PyPI is whitelisted by default but the interpreter downloads uv would
+# otherwise attempt are served from GitHub. Pinning that shut keeps
+# interpreters baked-only - unless the config deliberately allows it.
+if host_allowed github.com; then
+  info "github.com is allowed by the whitelist; skipping the interpreter-download probe"
+else
+  check_unreachable "https://github.com" "github.com over HTTPS (interpreter downloads)"
+fi
 
 # ---------------------------------------------------------------------------
 # Check 2: git push is impossible (no credentials)
@@ -412,18 +547,20 @@ fi
 # ---------------------------------------------------------------------------
 # Check 3: the Anthropic endpoints Claude Code needs are reachable
 # ---------------------------------------------------------------------------
-section "Anthropic endpoints must be reachable"
+section "Installed tools' endpoints must be reachable"
 
-# The API is the only hard requirement: without it Claude Code cannot run.
-# An unauthenticated request returns 401/405, which is proof of reachability.
-check_reachable "https://api.anthropic.com/v1/messages" "api.anthropic.com (API)" required
-
-# Supporting services. Losing these degrades Claude Code but does not break it,
-# so they are warnings rather than failures.
-check_reachable "https://statsig.com"                        "statsig.com (feature flags)"           optional
-check_reachable "https://sentry.io"                          "sentry.io (error reporting)"           optional
-check_reachable "https://registry.npmjs.org/-/ping"          "registry.npmjs.org (updates)"          optional
-check_reachable "https://pypi.org/simple/"                   "pypi.org (uv run inline deps)"         optional
+# Each bundle declares at most one `probe`: the endpoint without which the
+# tool cannot run. An unauthenticated request answering 401/405 is proof of
+# reachability. A failure here is post-start only; the start-time gate is
+# offline on purpose.
+PROBED=0
+for t in "${INSTALLED_TOOLS[@]}"; do
+  url=$(conf_values "$(tool_conf "$t")" probe | head -n 1)
+  [ -n "$url" ] || continue
+  PROBED=1
+  check_reachable "$url" "$t: $url" required
+done
+[ "$PROBED" -eq 1 ] || info "no installed tool declares a probe endpoint"
 
 # ---------------------------------------------------------------------------
 # Check 4: iptables whitelist mode
@@ -610,27 +747,32 @@ check_cache_dir "$UV_CACHE" "uv cache" "'uv cache dir'" \
 # Check 7: the named volumes belong to this workspace
 # ---------------------------------------------------------------------------
 #
-# devcontainer.json names the four volumes `claude-code-<kind>-<slug>-<id>`:
-# the workspace path, slugified by the host launcher and passed in as
-# ${localEnv:SBX_SLUG}, followed by ${devcontainerId}. The id is what keeps two
-# projects apart - the CLI derives it from the workspace folder and no launcher
-# can forget to supply it - so a missing or wrong slug pools nothing. What it
-# does mean is that whatever started this container does not know the naming
-# rule: a stale .bashrc block, an editor integration that bypasses sbx-acp.sh,
-# or a drift between sbx_slug() and the copy of the derivation below.
+# The base volumes are `sbx-<kind>-<slug>-<id>` and each installed tool's are
+# `sbx-<tool>-<kind>-<slug>-<id>`: the workspace path, slugified by the host
+# launcher and passed in as ${localEnv:SBX_SLUG}, followed by
+# ${devcontainerId}. The id is what keeps two projects apart - the CLI derives
+# it from the workspace folder and no launcher can forget to supply it - so a
+# missing or wrong slug pools nothing. What it does mean is that whatever
+# started this container does not know the naming rule: a bare `devcontainer
+# up`, an editor integration that bypasses sbx, or a drift between sbx_slug()
+# and the copy of the derivation below.
+#
+# The expected set is the base volumes plus the `volume` entries of the tools
+# installed in this image, so a tool the project used before and has since
+# disabled is not expected.
 #
 # That is a FAIL rather than a WARN for the same reason the rest of this file
 # fails loudly: the launch being stopped is not unsafe, it is misnamed, and the
 # volumes it would have used are a second, stray set that the wrappers will
 # never mount again. An earlier revision of this check had to be a FAIL for a
 # stronger reason - the names carried no ${devcontainerId} then, so an empty
-# slug really did pool every project's Claude Code credentials into one volume.
+# slug really did pool every project's agent credentials into one volume.
 # That is no longer the failure mode, and the comment should not imply it is.
 #
 # The container has no Docker socket, so the volume names are read from the
 # mount table, where the volume driver's host path carries the name:
 #
-#   /var/lib/docker/volumes/claude-code-config-<slug>-<id>/_data
+#   /var/lib/docker/volumes/sbx-claude-config-<slug>-<id>/_data
 #
 # The expected slug is re-derived here from ${localWorkspaceFolder}, passed in
 # as SBX_WORKSPACE, rather than from SBX_SLUG itself - comparing SBX_SLUG to a
@@ -684,25 +826,31 @@ else
   info "workspace: $SBX_WS"
   info "expected slug: $EXPECTED_SLUG"
 
-  # kind:mountpoint - the four volumes devcontainer.json declares.
-  for spec in \
-    "bashhistory:/commandhistory" \
-    "config:/home/node/.claude" \
-    "npm:/home/node/.npm" \
-    "uv:/home/node/.cache/uv"
-  do
-    kind="${spec%%:*}"
-    mountpoint="${spec#*:}"
+  # tool|kind|mountpoint - the base volumes, then each installed tool's.
+  VOLUME_SPECS=(
+    "|bashhistory|/commandhistory"
+    "|npm|/home/node/.npm"
+    "|uv|/home/node/.cache/uv"
+  )
+  for t in "${INSTALLED_TOOLS[@]}"; do
+    while IFS= read -r v; do
+      VOLUME_SPECS+=("$t|${v%%:*}|${v#*:}")
+    done < <(conf_values "$(tool_conf "$t")" volume)
+  done
+
+  for spec in "${VOLUME_SPECS[@]}"; do
+    IFS='|' read -r tool kind mountpoint <<<"$spec"
+    stem="sbx-${tool:+$tool-}${kind}"
 
     # The name has to start with this prefix and carry the id after it. The
     # trailing '-' is part of the prefix so that a slug which merely starts the
     # same way - `home-marcin-tools` against `home-marcin-tools-sandbox` - does
     # not match.
-    base="claude-code-${kind}-${EXPECTED_SLUG}"
+    base="${stem}-${EXPECTED_SLUG}"
     prefix="${base}-"
 
     if ! actual=$(volume_backing "$mountpoint"); then
-      bad "$mountpoint is not backed by a named volume - cannot confirm it is this workspace's"
+      bad "$mountpoint${tool:+ ($tool)} is not backed by a named volume - cannot confirm it is this workspace's"
       info "nothing in /proc/self/mountinfo maps $mountpoint to a /volumes/<name>/_data source"
       continue
     fi
@@ -720,13 +868,13 @@ else
         info "was not written by this devcontainer.json - most likely the container predates"
         info "the mounts it now declares and needs recreating with --remove-existing-container"
         ;;
-      "claude-code-${kind}--"*)
+      "${stem}--"*)
         bad "$mountpoint is backed by a volume with an empty workspace name"
         info "expected: ${prefix}<devcontainerId>"
         info "mounted:  $actual"
         info "SBX_SLUG was not exported by the launcher. The volume is still this workspace's -"
         info "\${devcontainerId} keeps it apart from every other project - but it is a second,"
-        info "stray set the wrappers will not use. Launch through sbx-up or sbx-acp.sh."
+        info "stray set sbx will not use. Launch through sbx or sbx-acp.sh."
         ;;
       *)
         bad "$mountpoint is backed by the wrong volume"
@@ -746,7 +894,8 @@ fi
 # the agent cannot tamper with the sandbox's own machinery. These probes pin
 # down what must stay read-only no matter what is mounted: the scripts that
 # install and check the firewall, the whitelist they read, the global
-# node_modules holding the claude binary, and $HOME itself - the named volumes
+# node_modules holding the tool binaries, the bundle files and baked policy,
+# and $HOME itself - the named volumes
 # are mounted *inside* $HOME, so that last one is what proves they did not make
 # the whole home directory writable.
 
@@ -780,12 +929,14 @@ check_ro_file() {
   fi
 }
 
-check_ro_dir  "/usr/local/bin"                     "sandbox scripts"
-check_ro_file "/usr/local/etc/allowed-domains.txt" "egress whitelist"
+check_ro_dir  "/usr/local/bin"   "sandbox scripts"
+check_ro_file "$WHITELIST_FILE"  "egress whitelist"
+check_ro_dir  "$SBX_SHARE"       "tool bundles"
+check_ro_dir  "/etc/sbx"         "baked sandbox policy and tool config"
 
 GLOBAL_MODULES=$(npm root -g 2>/dev/null | tr -d '\r' | tail -n 1)
 if [ -n "$GLOBAL_MODULES" ]; then
-  check_ro_dir "$GLOBAL_MODULES" "global node_modules (claude binary)"
+  check_ro_dir "$GLOBAL_MODULES" "global node_modules (tool binaries)"
 else
   bad "could not determine the global node_modules directory ('npm root -g')"
 fi
@@ -818,9 +969,8 @@ check_ro_dir "$HOME" "\$HOME (the named volumes mount inside it)"
 section "Host-only command guard"
 
 HOST_ONLY_LIST=/usr/local/etc/host-only-commands.txt
-HOST_ONLY_GUARD=/usr/local/bin/host-only-guard.sh
-HOST_ONLY_SETTINGS=/etc/claude-code/managed-settings.json
-HOST_ONLY_POLICY=/etc/claude-code/CLAUDE.md
+HOST_ONLY_CHECK=/usr/local/bin/host-only-check
+HOST_ONLY_POLICY=/etc/sbx/sandbox-policy.md
 
 # The commands the shipped list is expected to declare host-only - one per
 # family, so dropping a whole family from the list fails the launch instead of
@@ -849,17 +999,16 @@ HOST_ONLY_ALLOWED=(
 )
 
 # guard_probe <command> [list-path] -> sets GUARD_RC and GUARD_OUT
-# Feeds the guard a synthetic PreToolUse payload, exactly as Claude Code would.
+# Asks the shared matcher directly, the way every agent adapter does.
 guard_probe() {
-  local cmd="$1" list="${2:-$HOST_ONLY_LIST}" payload
-  payload=$(jq -n --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}')
-  GUARD_OUT=$(printf '%s' "$payload" | HOST_ONLY_COMMANDS="$list" "$HOST_ONLY_GUARD" 2>&1)
+  local cmd="$1" list="${2:-$HOST_ONLY_LIST}"
+  GUARD_OUT=$(HOST_ONLY_COMMANDS="$list" "$HOST_ONLY_CHECK" "$cmd" 2>&1)
   GUARD_RC=$?
 }
 
 HOST_ONLY_OK=1
 
-for f in "$HOST_ONLY_LIST" "$HOST_ONLY_GUARD" "$HOST_ONLY_SETTINGS" "$HOST_ONLY_POLICY"; do
+for f in "$HOST_ONLY_LIST" "$HOST_ONLY_CHECK" "$HOST_ONLY_POLICY"; do
   if [ -r "$f" ]; then
     ok "installed: $f"
   else
@@ -868,43 +1017,33 @@ for f in "$HOST_ONLY_LIST" "$HOST_ONLY_GUARD" "$HOST_ONLY_SETTINGS" "$HOST_ONLY_
   fi
 done
 
-if [ -x "$HOST_ONLY_GUARD" ]; then
-  ok "$HOST_ONLY_GUARD is executable"
+if [ -x "$HOST_ONLY_CHECK" ]; then
+  ok "$HOST_ONLY_CHECK is executable"
 else
-  bad "$HOST_ONLY_GUARD is not executable - the hook would fail to run"
-  HOST_ONLY_OK=0
-fi
-
-# The settings file is what actually activates the guard; a correct script that
-# nothing invokes is the quietest possible way for this to be broken.
-if [ -r "$HOST_ONLY_SETTINGS" ] && grep -qF "$HOST_ONLY_GUARD" "$HOST_ONLY_SETTINGS"; then
-  ok "managed settings register the guard as a PreToolUse hook"
-else
-  bad "managed settings do not reference $HOST_ONLY_GUARD"
-  info "the guard would never be invoked; see $HOST_ONLY_SETTINGS"
+  bad "$HOST_ONLY_CHECK is not executable - every agent's guard would fail"
   HOST_ONLY_OK=0
 fi
 
 if [ "$HOST_ONLY_OK" -eq 1 ]; then
-  # The list must parse. The guard validates it the same way at hook time, so
-  # asking the guard keeps one implementation of the rules.
-  if PARSE_OUT=$(HOST_ONLY_COMMANDS="$HOST_ONLY_LIST" "$HOST_ONLY_GUARD" --check-list 2>&1); then
-    ok "${PARSE_OUT#host-only-guard: }"
+  # The list must parse. The matcher validates it the same way at call time,
+  # so asking it keeps one implementation of the rules.
+  if PARSE_OUT=$(HOST_ONLY_COMMANDS="$HOST_ONLY_LIST" "$HOST_ONLY_CHECK" --check-list 2>&1); then
+    ok "${PARSE_OUT#host-only-check: }"
   else
     bad "$HOST_ONLY_LIST does not parse"
-    while IFS= read -r l; do info "${l#host-only-guard: }"; done <<<"$PARSE_OUT"
+    while IFS= read -r l; do info "${l#host-only-check: }"; done <<<"$PARSE_OUT"
   fi
 
-  # Exercise the guard rather than trusting its configuration: every family the
-  # list is relied on to declare must be blocked, and the commands it is relied
-  # on NOT to declare must pass.
+  # Exercise the matcher rather than trusting its configuration: every family
+  # the list is relied on to declare must be blocked, and the commands it is
+  # relied on NOT to declare must pass.
   for cmd in "${HOST_ONLY_SAMPLES[@]}"; do
     guard_probe "$cmd"
     if [ "$GUARD_RC" -eq 2 ]; then
-      ok "guard blocks a declared host-only command ('$cmd')"
+      ok "matcher blocks a declared host-only command ('$cmd')"
     else
-      bad "guard did NOT block '$cmd' (exit $GUARD_RC)"
-      info "either the guard is broken, or the list no longer declares this"
+      bad "matcher did NOT block '$cmd' (exit $GUARD_RC)"
+      info "either the matcher is broken, or the list no longer declares this"
       info "family - update HOST_ONLY_SAMPLES here if that was on purpose"
     fi
   done
@@ -912,17 +1051,17 @@ if [ "$HOST_ONLY_OK" -eq 1 ]; then
   for cmd in "${HOST_ONLY_ALLOWED[@]}"; do
     guard_probe "$cmd"
     if [ "$GUARD_RC" -eq 0 ] && [ -z "$GUARD_OUT" ]; then
-      ok "guard passes an ordinary command through silently ('$cmd')"
+      ok "matcher passes an ordinary command through silently ('$cmd')"
     else
-      bad "guard interfered with '$cmd' (exit $GUARD_RC)"
+      bad "matcher interfered with '$cmd' (exit $GUARD_RC)"
       info "an over-broad pattern in the list takes a working command away"
       [ -n "$GUARD_OUT" ] && info "$(head -n 1 <<<"$GUARD_OUT")"
     fi
   done
 
   # The two probes above depend on the shipped list's contents. Repeat them
-  # against a list written here, so a guard whose matching has stopped working
-  # is caught even if the shipped list is what changed.
+  # against a list written here, so a matcher that has stopped working is
+  # caught even if the shipped list is what changed.
   GUARD_PROBE_DIR=$(mktemp -d)
   printf '%s\n' \
     'sandbox-verify-probe([[:space:]]|$)  ::  synthetic entry used by verify.sh' \
@@ -934,23 +1073,80 @@ if [ "$HOST_ONLY_OK" -eq 1 ]; then
   ALLOWS_SYNTHETIC=$([ "$GUARD_RC" -eq 0 ] && echo 1 || echo 0)
 
   if [ "$BLOCKS_SYNTHETIC" -eq 1 ] && [ "$ALLOWS_SYNTHETIC" -eq 1 ]; then
-    ok "guard matching works against a list written by this script"
+    ok "matcher works against a list written by this script"
   else
-    bad "guard matching is broken (synthetic block=$BLOCKS_SYNTHETIC allow=$ALLOWS_SYNTHETIC)"
+    bad "matcher is broken (synthetic block=$BLOCKS_SYNTHETIC allow=$ALLOWS_SYNTHETIC)"
   fi
 
   # Failing closed on a broken policy is the whole point; check it explicitly.
   guard_probe "$HOST_ONLY_ORDINARY" "$GUARD_PROBE_DIR/does-not-exist.txt"
   if [ "$GUARD_RC" -eq 2 ]; then
-    ok "guard refuses commands when the list is missing (fails closed)"
+    ok "matcher refuses commands when the list is missing (fails closed)"
   else
-    bad "guard allowed a command with a missing list (exit $GUARD_RC) - it fails open"
+    bad "matcher allowed a command with a missing list (exit $GUARD_RC) - it fails open"
   fi
 
   rm -rf "$GUARD_PROBE_DIR"
 else
-  info "skipping the behavioural probes - the guard is not installed correctly"
+  info "skipping the behavioural probes - the matcher is not installed correctly"
 fi
+
+# Each installed agent's adapter. A correct matcher that nothing invokes is the
+# quietest possible way for the guard to be broken. Tools this script knows no
+# adapter for get the policy text only, which check 12 does not cover.
+for t in "${INSTALLED_TOOLS[@]}"; do
+  case "$t" in
+    claude)
+      CC_SETTINGS=/etc/claude-code/managed-settings.json
+      CC_GUARD=/etc/claude-code/host-only-guard.sh
+      if [ -r "$CC_SETTINGS" ] && grep -qF "$CC_GUARD" "$CC_SETTINGS"; then
+        ok "claude: managed settings register $CC_GUARD as a PreToolUse hook"
+      else
+        bad "claude: $CC_SETTINGS does not reference $CC_GUARD - the guard would never run"
+      fi
+      if [ "$(jq -r '.permissions.defaultMode // ""' "$CC_SETTINGS" 2>/dev/null)" = bypassPermissions ] &&
+         [ "$(jq -r '.skipDangerousModePermissionPrompt // false' "$CC_SETTINGS" 2>/dev/null)" = true ]; then
+        ok "claude: managed settings bypass permissions with no confirmation prompt"
+      else
+        bad "claude: managed settings do not set defaultMode bypassPermissions and skipDangerousModePermissionPrompt"
+      fi
+      if cmp -s /etc/claude-code/CLAUDE.md "$HOST_ONLY_POLICY"; then
+        ok "claude: /etc/claude-code/CLAUDE.md is the sandbox policy"
+      else
+        bad "claude: /etc/claude-code/CLAUDE.md is missing or differs from $HOST_ONLY_POLICY"
+      fi
+      for cmd in 'git commit -m x' 'git status'; do
+        want=$([ "$cmd" = 'git status' ] && echo 0 || echo 2)
+        out=$(jq -n --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}' | "$CC_GUARD" 2>&1)
+        rc=$?
+        if [ "$rc" -eq "$want" ]; then
+          ok "claude: hook adapter exits $rc for '$cmd'"
+        else
+          bad "claude: hook adapter exited $rc for '$cmd', expected $want"
+          [ -n "$out" ] && info "$(head -n 1 <<<"$out")"
+        fi
+      done
+      ;;
+    opencode)
+      OC_DIR=/etc/sbx/opencode
+      if [ "${OPENCODE_CONFIG_DIR:-}" = "$OC_DIR" ]; then
+        ok "opencode: OPENCODE_CONFIG_DIR is $OC_DIR"
+      else
+        bad "opencode: OPENCODE_CONFIG_DIR is '${OPENCODE_CONFIG_DIR:-unset}', expected $OC_DIR - its policy and guard are not loaded"
+      fi
+      if jq -e --arg p "$HOST_ONLY_POLICY" '.instructions | index($p)' "$OC_DIR/opencode.json" >/dev/null 2>&1; then
+        ok "opencode: opencode.json loads the sandbox policy"
+      else
+        bad "opencode: $OC_DIR/opencode.json does not list $HOST_ONLY_POLICY in instructions"
+      fi
+      if grep -qF "$HOST_ONLY_CHECK" "$OC_DIR/plugin/host-only-guard.js" 2>/dev/null; then
+        ok "opencode: guard plugin is installed and calls $HOST_ONLY_CHECK"
+      else
+        bad "opencode: $OC_DIR/plugin/host-only-guard.js is missing or does not call $HOST_ONLY_CHECK"
+      fi
+      ;;
+  esac
+done
 
 # ---------------------------------------------------------------------------
 # Check 10: the mounted repository cannot be written
@@ -1061,6 +1257,142 @@ else
     bad "UV_PYTHON_DOWNLOADS is '${UV_PYTHON_DOWNLOADS:-unset}', expected 'never'"
     info "a missing interpreter would then fail as a firewall timeout instead of a clear error"
   fi
+fi
+
+
+# ---------------------------------------------------------------------------
+# Check 12: installed tools are on PATH, from read-only locations
+# ---------------------------------------------------------------------------
+#
+# Expectations come from tools.list and each bundle's tool.conf, never from
+# this script, so adding a bundle needs no edit here. `type -P` resolves the
+# way `sbx <cmd>` and ACP do: no shell aliases, bundle scripts first.
+
+section "installed tools must be on PATH and read-only"
+
+if [ ! -r "$TOOLS_LIST" ]; then
+  bad "cannot read $TOOLS_LIST - which tools this image carries is unknown"
+else
+  info "installed tools: ${INSTALLED_TOOLS[*]:-none}"
+fi
+
+for t in "${INSTALLED_TOOLS[@]}"; do
+  conf=$(tool_conf "$t")
+  if [ ! -r "$conf" ]; then
+    bad "$t: $conf is missing - the bundle was not installed correctly"
+    continue
+  fi
+
+  while IFS= read -r b; do
+    if ! p=$(type -P "$b"); then
+      bad "$t: '$b' is not on PATH"
+      continue
+    fi
+    real=$(readlink -f "$p")
+    probe="$(dirname "$real")/.verify-ro-probe.$$"
+    if ( : > "$probe" ) 2>/dev/null; then
+      rm -f "$probe"
+      bad "$t: '$b' resolves to a WRITABLE package dir ($(dirname "$real"))"
+    else
+      ok "$t: '$b' is on PATH ($p) from a read-only package dir"
+    fi
+  done < <(conf_values "$conf" bin)
+
+  acp=$(conf_values "$conf" acp | head -n 1)
+  if [ -n "$acp" ]; then
+    if p=$(type -P "${acp%% *}"); then
+      ok "$t: ACP command '$acp' resolves ($p)"
+    else
+      bad "$t: ACP command '${acp%% *}' is not on PATH - the agent cannot be served over ACP"
+    fi
+  elif [ "$(conf_values "$conf" type | head -n 1)" = agent ]; then
+    bad "$t: agent bundle declares no acp command"
+  fi
+
+  for f in "$SBX_SHARE/tools/$t/bin"/*; do
+    [ -f "$f" ] || continue
+    name="${f##*/}"
+    p=$(type -P "$name" || true)
+    if [ "$p" = "$SBX_SHARE/bin/$name" ]; then
+      ok "$t: bundle script '$name' resolves to $p"
+    else
+      bad "$t: bundle script '$name' resolves to '${p:-nothing}', expected $SBX_SHARE/bin/$name"
+    fi
+  done
+done
+
+check_ro_dir "$SBX_SHARE/bin" "bundle scripts"
+
+# ---------------------------------------------------------------------------
+# Check 13: tool scratch directories are writable and noexec
+# ---------------------------------------------------------------------------
+
+section "tool scratch directories must be writable and noexec"
+
+SCRATCH_FOUND=0
+for t in "${INSTALLED_TOOLS[@]}"; do
+  while IFS= read -r dir; do
+    SCRATCH_FOUND=1
+    if [ ! -d "$dir" ]; then
+      bad "$t: scratch directory $dir does not exist"
+      continue
+    fi
+    probe="$dir/.verify-scratch-probe.$$.sh"
+    if ! ( printf '#!/bin/sh\necho exec-ok\n' > "$probe" ) 2>/dev/null; then
+      bad "$t: scratch directory $dir is not writable - the tool fails with EROFS"
+      continue
+    fi
+    ok "$t: $dir is writable"
+    chmod +x "$probe" 2>/dev/null
+    if [ "$("$probe" 2>/dev/null || true)" = "exec-ok" ]; then
+      bad "$t: $dir is exec-capable - a tmpfs declared as scratch must be noexec"
+    else
+      ok "$t: $dir is noexec"
+    fi
+    rm -f "$probe"
+  done < <(conf_values "$(tool_conf "$t")" tmpfs)
+done
+[ "$SCRATCH_FOUND" -eq 1 ] || info "no installed tool declares a scratch directory"
+
+# ---------------------------------------------------------------------------
+# Check 14: the config governing this container is read-only from inside
+# ---------------------------------------------------------------------------
+#
+# The project's .sbx/config decides what this container may reach; if the
+# agent could rewrite it, the next launch would widen the sandbox on the
+# agent's say-so (the host's approval gate is the second line, not the first).
+# The policy the firewall loaded must likewise be the launcher's host-side
+# file, not something in the workspace or the image.
+
+section "config and policy must be read-only from inside"
+
+if [ -z "${SBX_WORKSPACE:-}" ]; then
+  bad "SBX_WORKSPACE is not set - cannot locate the workspace's .sbx"
+elif [ -e "$SBX_WORKSPACE/.sbx" ]; then
+  SBX_PROBE="$SBX_WORKSPACE/.sbx/.verify-ro-probe.$$"
+  if [ -d "$SBX_WORKSPACE/.sbx" ] && ( : > "$SBX_PROBE" ) 2>/dev/null; then
+    rm -f "$SBX_PROBE"
+    bad "$SBX_WORKSPACE/.sbx is WRITABLE - the agent can rewrite the config that governs it"
+  elif [ -f "$SBX_WORKSPACE/.sbx/config" ] && ( : >> "$SBX_WORKSPACE/.sbx/config" ) 2>/dev/null; then
+    bad "$SBX_WORKSPACE/.sbx/config is WRITABLE - the agent can rewrite the config that governs it"
+  else
+    ok "$SBX_WORKSPACE/.sbx is read-only"
+  fi
+else
+  info "the workspace has no .sbx; it runs on the defaults"
+fi
+
+check_ro_dir "$SBX_ETC" "firewall policy mount"
+SBX_ETC_REAL=$(readlink -f "$SBX_ETC")
+if [ -n "${SBX_WORKSPACE:-}" ] && { [ "$SBX_ETC_REAL" = "$SBX_WORKSPACE" ] || [[ "$SBX_ETC_REAL" == "$SBX_WORKSPACE"/* ]]; }; then
+  bad "$SBX_ETC resolves inside the workspace ($SBX_ETC_REAL)"
+else
+  ok "$SBX_ETC is outside the workspace"
+fi
+if awk -v t="$SBX_ETC" '$5 == t { found = 1 } END { exit !found }' /proc/self/mountinfo 2>/dev/null; then
+  ok "$SBX_ETC is a mount from the host, not the image's empty mount point"
+else
+  bad "$SBX_ETC is not a mount - the firewall policy did not come from the launcher"
 fi
 
 

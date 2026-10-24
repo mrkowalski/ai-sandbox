@@ -1,4 +1,8 @@
 {
+  "permissions": {
+    "defaultMode": "bypassPermissions"
+  },
+  "skipDangerousModePermissionPrompt": true,
   "hooks": {
     "PreToolUse": [
       {
@@ -6,7 +10,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "/usr/local/bin/host-only-guard.sh"
+            "command": "/etc/claude-code/host-only-guard.sh"
           }
         ]
       }

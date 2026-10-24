@@ -67,8 +67,9 @@ There is no start command. The rootfs stays read-only, so a tool's write outside
 - `type = agent`, `acp = opencode acp`.
 - Installs `npm i -g opencode-ai`.
 - Bakes `/etc/sbx/opencode/` and sets `env = OPENCODE_CONFIG_DIR=/etc/sbx/opencode`. It holds `opencode.json` with `instructions: ["/etc/sbx/sandbox-policy.md"]`, and `plugin/host-only-guard.js`, a `tool.execute.before` plugin that hands each bash command to the base matcher and throws its message on a match.
-- Declares volumes for `~/.config/opencode` and `~/.local/share/opencode`, and a `volume` or `tmpfs` for each further directory it writes (such as `~/.cache/opencode` and `~/.local/state/opencode`), as found in task 1.3.
-- Its domains are confirmed in task 1.3.
+- Declares volumes for `~/.config/opencode`, `~/.local/share/opencode`, `~/.local/state/opencode`, and `~/.cache/opencode`: the four directories it wrote on the read-only rootfs in task 1.3 (opencode 1.19.4). The cache holds binaries it downloads and executes, so it is a volume, not a noexec tmpfs.
+- Domains (task 1.3): `api.anthropic.com` and `models.opencode.ai` (model catalogue). `registry.npmjs.org`, which it uses for a background install of `@opencode-ai/plugin` into `~/.config/opencode`, is a warning only and stays in the defaults rather than the bundle. It downloads ripgrep from `github.com` unless `rg` is on `PATH`, so `install-root.sh` installs Debian's `ripgrep`; this is the one bundle that adds a system package.
+- Task 1.3 confirmed the plugin loads from a read-only `OPENCODE_CONFIG_DIR` and blocks `git commit` with the `host-only-check` message, and that the policy reaches the system prompt through `instructions`. The plugin imports nothing from `@opencode-ai/plugin`, since that package is installed in the background and may be absent.
 
 `sandbox-policy.md` becomes agent-neutral, at `/etc/sbx/sandbox-policy.md` in the base.
 
@@ -81,7 +82,7 @@ There is no start command. The rootfs stays read-only, so a tool's write outside
 - `tools`: space-separated; the project value replaces the default.
 - `allow`, `deny`: repeatable, one entry each. An entry is a hostname, validated against `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`, or an IPv4 address or CIDR range with a prefix of /16 or longer. Private, loopback, link-local, CGNAT, and multicast ranges are rejected: the Docker host is reached through `host-network` only. Bundle `allowed-domains.txt` entries get the same validation.
 - `host-network`: `on` or `off`.
-- `mount`: repeatable, `<abs path>[:rw]`. The path is resolved with `realpath`, and ancestry is checked on resolved paths so a symlink cannot sneak past the protected-path rule. Protected from `:rw`: this repo and `~/.local/state/sbx`, and every ancestor of either.
+- `mount`: repeatable, `<abs path>[:rw]`. The path is resolved with `realpath`, and ancestry is checked on resolved paths so a symlink cannot sneak past the protected-path rule; the resolved path is the bind source and target. Protected from `:rw`: this repo and `~/.local/state/sbx`, every ancestor of either, and everything inside them. Refused in any mode, because the bind lands at the same path inside the container: a container system path (`/usr`, `/etc`, `/home/node`, `/tmp`, ...), any ancestor of one, an ancestor of the workspace (it would cover the read-only `.git` and `.sbx` binds), and a path containing `,`, `$`, quotes, `\`, or `=` (they break or are interpolated in the devcontainer mount string).
 
 *Alternatives:* YAML/TOML would need `yq` or Python on the host. JSON/`jq` is unfriendly to hand-edit and has no comments.
 

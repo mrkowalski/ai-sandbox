@@ -1,0 +1,5 @@
+# The Anthropic provider's API.
+api.anthropic.com
+
+# The model catalogue opencode fetches at start (models.dev).
+models.opencode.ai
