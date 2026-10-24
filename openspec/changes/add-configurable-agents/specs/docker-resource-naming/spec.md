@@ -8,13 +8,13 @@ The sandbox's per-project named volumes SHALL carry a component derived from the
 
 The derivation SHALL be: take the absolute workspace path, strip the leading `/`, lowercase it, and replace every character outside `[a-z0-9_.-]` with `-`, evaluated bytewise so that a non-ASCII path yields a stable name rather than a locale-dependent one.
 
-That component SHALL lead the name, ahead of any uniqueness key, so that one project's volumes sort together in a listing.
+Every volume name SHALL begin with `sbx-`, followed by the tool name for a tool's state volume, then the kind of state. The workspace-path component SHALL follow, ahead of any uniqueness key, so that one project's volumes sort together in a listing.
 
 #### Scenario: A volume is attributable to its project
 
 - **WHEN** an operator lists Docker volumes on the host after launching the sandbox in `/home/<user>/tools/sandbox` with `tools = claude opencode`
-- **THEN** the base volumes begin `claude-code-bashhistory-home-<user>-tools-sandbox`, `claude-code-npm-home-<user>-tools-sandbox`, and `claude-code-uv-home-<user>-tools-sandbox`
-- **AND** the tool volumes begin `claude-code-config-home-<user>-tools-sandbox` for Claude Code and `claude-code-opencode-<state>-home-<user>-tools-sandbox` for each state directory opencode declares
+- **THEN** the base volumes begin `sbx-bashhistory-home-<user>-tools-sandbox`, `sbx-npm-home-<user>-tools-sandbox`, and `sbx-uv-home-<user>-tools-sandbox`
+- **AND** the tool volumes begin `sbx-claude-config-home-<user>-tools-sandbox` for Claude Code and `sbx-opencode-<kind>-home-<user>-tools-sandbox` for each state directory opencode declares
 - **AND** filtering the listing on `home-<user>-tools-sandbox` returns that project's volumes and no others
 
 #### Scenario: A path that is not a legal volume name

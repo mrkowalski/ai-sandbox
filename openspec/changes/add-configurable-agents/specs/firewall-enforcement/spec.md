@@ -13,7 +13,7 @@ The firewall SHALL read its whitelist and host-network flag from a fixed path th
 
 #### Scenario: Launched without the launcher
 
-- **WHEN** the container is started by a bare `devcontainer up` that supplies no policy mount
+- **WHEN** the container is started without the launcher's policy mount, by a bare `devcontainer up` on the static config or a `docker run` of the image
 - **THEN** firewall installation aborts on the unreadable whitelist, the container stops, and the log names the missing policy
 
 ### Requirement: IPv4 whitelist entries are allowed as given

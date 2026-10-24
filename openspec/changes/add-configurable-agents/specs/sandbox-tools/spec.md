@@ -17,7 +17,7 @@ The firewall, read-only rootfs, read-only `.git` and `.sbx`, entrypoint gate, an
 
 ### Requirement: Tools are self-contained bundles
 
-Each tool SHALL be defined by one bundle directory, enabled as a unit when a config lists the tool. The bundle declares its install step, baked config files, scripts, and hooks, binaries, required hostnames and IPv4 ranges, persistent state directories, other writable directories, and reachability probe. It SHALL NOT declare a start command. Adding a tool SHALL NOT require editing the base or any other tool.
+Each tool SHALL be defined by one bundle directory, enabled as a unit when a config lists the tool. The bundle declares its install step, baked config files and hooks, its own scripts and interactive shell aliases, binaries, required hostnames and IPv4 ranges, persistent state directories, other writable directories, and reachability probe. It SHALL NOT declare a start command. Adding a tool SHALL NOT require editing the base or any other tool.
 
 #### Scenario: Adding a new tool
 
@@ -33,6 +33,34 @@ Each tool SHALL be defined by one bundle directory, enabled as a unit when a con
 
 - **WHEN** a project enables `opencode`
 - **THEN** opencode's baked config and guard plugin are in effect with no project file, and disabling `opencode` removes them with it
+
+### Requirement: Bundles can ship scripts
+
+A bundle SHALL be able to ship executable scripts that are on `PATH` ahead of the tools' own binaries whenever the bundle is enabled, both for `sbx <cmd>` and for ACP commands. A script MAY have the same name as one of the bundle's own binaries and wrap it, which is how a bundle adds default arguments to its binary. A bundle SHALL also be able to ship aliases and functions that interactive shells load.
+
+#### Scenario: Helper script
+
+- **WHEN** an enabled bundle ships a script `foo`
+- **THEN** `sbx foo` runs it inside the sandbox, and a process inside the container cannot modify it
+
+#### Scenario: Wrapper adds default flags
+
+- **WHEN** an enabled bundle ships a script with the same name as its binary that runs the binary with an extra flag
+- **THEN** `sbx <binary>` runs the wrapper, and the binary runs with the flag added
+
+#### Scenario: Interactive alias
+
+- **WHEN** an enabled bundle ships a shell alias
+- **THEN** the alias is defined in `sbx bash`, and is absent from the container when the tool is disabled
+
+### Requirement: Bundle scripts do not collide
+
+A bundle script SHALL NOT shadow a base command, and two enabled bundles SHALL NOT ship scripts with the same name. Either one SHALL fail the image build.
+
+#### Scenario: Script shadows a base command
+
+- **WHEN** a bundle ships a script named `git`, or two enabled bundles ship scripts with the same name
+- **THEN** the image build fails and names the script and the bundles
 
 ### Requirement: Bundles come only from this repo
 
@@ -69,7 +97,7 @@ A tool bundle SHALL be able to install, from outside the workspace, the settings
 #### Scenario: Claude without flags
 
 - **WHEN** the user runs `sbx claude` in a project that enables `claude`
-- **THEN** Claude Code starts with permission prompts bypassed, as `claude --dangerously-skip-permissions` does today
+- **THEN** Claude Code starts with permission prompts bypassed, as `claude --dangerously-skip-permissions` does today, and shows no bypass-mode confirmation, whether through baked settings or a bundle wrapper
 
 ### Requirement: Tool binaries are not writable from inside
 
@@ -119,7 +147,7 @@ Each coding-agent tool SHALL be configured, from a location outside the workspac
 
 ### Requirement: Verification follows the installed tools
 
-Verification SHALL derive the tools it checks from the image itself. For each installed tool it SHALL assert that its declared binaries, and an agent's ACP command, are on `PATH`, that its state volumes are mounted under the expected names, that its declared scratch directories are writable, and that its declared endpoint is reachable.
+Verification SHALL derive the tools it checks from the image itself. For each installed tool it SHALL assert that its declared binaries, and an agent's ACP command, are on `PATH`, that its state volumes are mounted under the expected names, that its declared scratch directories are writable, that its scripts are on `PATH` and read-only, and that its declared endpoint is reachable.
 
 #### Scenario: Tool endpoint unreachable
 

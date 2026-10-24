@@ -4,6 +4,8 @@
 
 Today `.devcontainer/Dockerfile` bakes Claude Code, `claude-agent-acp` and OpenSpec. `devcontainer.json` is static: four volumes, a `build` section, and `postStartCommand`. `init-firewall.sh` reads `/usr/local/etc/allowed-domains.txt` under `sudo`, which resets the environment, so paths are effectively fixed. It also always ACCEPTs the Docker host's /24. Launching goes through README shell functions plus `sbx-acp.sh`. The rest of the context is in proposal.md.
 
+Greenfield: no migration and no backwards compatibility. Existing sandbox volumes and images are removed by hand, and each agent logs in again once.
+
 ## Goals / Non-Goals
 
 **Non-Goals:**
@@ -27,7 +29,7 @@ Today `.devcontainer/Dockerfile` bakes Claude Code, `claude-agent-acp` and OpenS
 | git, gh, node/npm, uv/python, jq, openspec | base | harmless without egress or credentials |
 | npm, uv, and bash-history volumes | base | per project, no new reach |
 | Egress hostnames and public IPv4 ranges, including npm, PyPI, and Anthropic | config `allow`/`deny` | every entry is an exfiltration path |
-| Tools (bundle: binary, baked files and hooks, ACP entry, hosts and IPv4 ranges, state volumes, writable directories) | config `tools` | reach comes through their hosts and stored credentials |
+| Tools (bundle: binary, baked files and hooks, scripts and aliases, ACP entry, hosts and IPv4 ranges, state volumes, writable directories) | config `tools` | reach comes through their hosts and stored credentials |
 | Docker-host /24 | config `host-network`, default off | reaches services on the host |
 | Extra host folders | config `mount`, read-only default | exposes host data |
 
@@ -39,12 +41,14 @@ The shipped `.devcontainer/sbx-defaults.conf` contains `tools =` (none) and `all
 **Tool bundle.** `.devcontainer/tools/<name>/` is the whole unit a config enables with `tools`; nothing outside it is tool-specific. Nothing in it can weaken the base: install scripts only write the image, and every runtime grant is a `tool.conf` key the launcher validates. It holds:
 - `install.sh`: runs as `node` at build and writes only to the npm prefix or `/usr/local/share/sbx/<name>`. An optional `install-root.sh` places baked settings, hook scripts, and plugins under `/etc/<tool>` or `/etc/sbx/<name>/`.
 - Any further files the install scripts copy (config templates, hook scripts, plugins). They end up in the read-only rootfs, never in a volume or the workspace.
+- `bin/` (optional): executable scripts. The build copies every selected bundle's `bin/*` into `/usr/local/share/sbx/bin/`, which the base puts first on `PATH`, ahead of the npm prefix. Two bundles shipping the same name fail the build, and so does a name that shadows a base command (anything on the base image's `PATH`, such as `git` or `verify.sh`) other than one of the bundle's own `bin` entries. A script is either a helper command or a wrapper with the same name as the tool's binary that `exec`s the real binary by absolute path with extra arguments. Wrappers are how a bundle aliases a command: `sbx <cmd>` and ACP run no interactive shell, so bash aliases never apply there.
+- `shell.sh` (optional): aliases and functions for interactive shells only (`sbx bash`). The base `/etc/bash.bashrc` sources `/usr/local/share/sbx/tools/<name>/shell.sh` for each entry in `tools.list`.
 - `allowed-domains.txt`: the hostnames, and public IPv4 addresses or CIDR ranges, the tool requires. Same validation as config `allow`.
 - `tool.conf`: the same parser as the config. Keys:
   - `type = agent | tool` (required). An `agent` must also declare `acp` and must load the sandbox policy.
   - `bin` (repeatable, checked on `PATH`).
   - `acp = <command> [args...]`: the ACP server on stdio. Its first word must be one of the `bin` entries.
-  - `volume = <kind>:<path>` (repeatable): persistent writable state, a named per-project volume.
+  - `volume = <kind>:<path>` (repeatable): persistent writable state, a named per-project volume `sbx-<name>-<kind>-<slug>-<devcontainerId>`. Base volumes are `sbx-<kind>-<slug>-<devcontainerId>` (`bashhistory`, `npm`, `uv`).
   - `tmpfs = <path>` (repeatable): writable scratch, `noexec,nosuid`, discarded on recreation.
   - `env = KEY=VALUE` (repeatable).
   - `probe = <url>`.
@@ -54,7 +58,7 @@ There is no start command. The rootfs stays read-only, so a tool's write outside
 `claude`:
 - `type = agent`, `acp = claude-agent-acp`.
 - Installs Claude Code and `claude-agent-acp`.
-- Writes `managed-settings.json` to `/etc/claude-code/`, now with `permissions.defaultMode = "bypassPermissions"` alongside the guard hook, which calls the base matcher.
+- Writes `managed-settings.json` to `/etc/claude-code/`, now with `permissions.defaultMode = "bypassPermissions"` and `skipDangerousModePermissionPrompt = true` alongside the guard hook, which calls the base matcher. Settings, not a wrapper, because `claude-agent-acp` reads them too.
 - Copies the policy to `/etc/claude-code/CLAUDE.md`.
 - Declares `volume = config:/home/node/.claude` and `env = CLAUDE_CONFIG_DIR=/home/node/.claude`.
 - Owns the Anthropic, statsig, and sentry hosts.
@@ -63,8 +67,8 @@ There is no start command. The rootfs stays read-only, so a tool's write outside
 - `type = agent`, `acp = opencode acp`.
 - Installs `npm i -g opencode-ai`.
 - Bakes `/etc/sbx/opencode/` and sets `env = OPENCODE_CONFIG_DIR=/etc/sbx/opencode`. It holds `opencode.json` with `instructions: ["/etc/sbx/sandbox-policy.md"]`, and `plugin/host-only-guard.js`, a `tool.execute.before` plugin that hands each bash command to the base matcher and throws its message on a match.
-- Declares volumes for `~/.config/opencode` and `~/.local/share/opencode`, and a `volume` or `tmpfs` for each further directory it writes (such as `~/.cache/opencode` and `~/.local/state/opencode`), as found in task 2.3.
-- Its domains are confirmed in task 2.3.
+- Declares volumes for `~/.config/opencode` and `~/.local/share/opencode`, and a `volume` or `tmpfs` for each further directory it writes (such as `~/.cache/opencode` and `~/.local/state/opencode`), as found in task 1.3.
+- Its domains are confirmed in task 1.3.
 
 `sandbox-policy.md` becomes agent-neutral, at `/etc/sbx/sandbox-policy.md` in the base.
 
@@ -85,22 +89,22 @@ There is no start command. The rootfs stays read-only, so a tool's write outside
 1. Resolve and validate the config.
 2. Run the approval gate.
 3. Compute the image hash and build if the tag is missing; `--rebuild` passes `--no-cache` and always builds.
-4. Write `~/.local/state/sbx/<slug>/policy/` (`allowed-domains.txt`, `firewall.conf` with `HOST_NETWORK=0|1`) and a generated `devcontainer.json`.
-5. `devcontainer up --config .devcontainer/devcontainer.json --override-config <generated>`, adding `--remove-existing-container` only when the running container's `sbx.config` label differs from the hash of the resolved config plus the image.
+4. Write `~/.local/state/sbx/<slug>/policy/` (`allowed-domains.txt`, `firewall.conf` with `HOST_NETWORK=0|1`) and `~/.local/state/sbx/<slug>/devcontainer.json`, a complete config.
+5. `devcontainer up --config <generated>`, adding `--remove-existing-container` only when the running container's `sbx.config` label differs from the hash of the resolved config plus the image.
 6. `sbx_tag_image`.
 7. `devcontainer exec ... "$@"`, propagating its exit status.
 
 Everything `sbx` prints itself goes to stderr, so stdout carries only the command's output. ACP depends on this.
 
-The generated config is the static one with:
+The generated config is the static `.devcontainer/devcontainer.json` merged with `jq`, so `jq` is a host requirement checked like docker and the devcontainer CLI. It is the static one with:
 - `build` replaced by `"image": "sbx-img:<hash>"`
 - `--label=sbx.config=<hash>` added to `runArgs`
-- the tool volumes, tmpfs mounts, and env
+- the base volumes under the `sbx-` prefix, and the tool volumes, tmpfs mounts, and env
 - a read-only bind of the policy dir at `/usr/local/etc/sbx`
 - a read-only bind of `<workspace>/.sbx` when it exists
 - the `mount` entries
 
-Keeping `--config` constant is meant to keep `devcontainerId`, and with it the existing Claude volumes, stable. Task 1.1 checks this.
+`devcontainerId` stays stable per project because the generated path is fixed per slug. `--override-config` is not used: it replaces the base config rather than merging, so a complete file is needed either way.
 *Alternatives:* Compose, or plain `docker run`. Either one would re-specify the entrypoint and `overrideCommand` pinning, `postStartCommand` verification, and `devcontainerId` naming that `firewall-enforcement` and `docker-resource-naming` already rest on.
 
 **Firewall reads `/usr/local/etc/sbx/`.** `init-firewall.sh` changes its default path to `/usr/local/etc/sbx/allowed-domains.txt` and reads `HOST_NETWORK` from `/usr/local/etc/sbx/firewall.conf`. It parses `firewall.conf` with `grep`, not `source`, for the same data-not-code reason. Whitelist entries that are IPv4 addresses or ranges go into the `allowed-domains` ipset (already `hash:net`) as given, with no DNS lookup. It adds the host /24 INPUT and OUTPUT ACCEPTs only when the flag is `1`. Fixed paths keep `sudo` and sudoers unchanged. The image ships an empty mount point, so a launch without the mount aborts on the unreadable whitelist. That path is already sealed and fatal under `firewall-enforcement`. A missing source dir on `docker start` makes Docker refuse to start the container, which also fails closed.
@@ -116,22 +120,14 @@ Keeping `--config` constant is meant to keep `devcontainerId`, and with it the e
 - A new check asserts each tool's `tmpfs` paths are writable and `noexec`.
 - Another new check asserts that `.sbx` is read-only when it exists.
 - Another new check asserts that `/usr/local/etc/sbx` is read-only and not inside the workspace.
+- Another new check asserts that each installed bundle's `bin/` scripts resolve on `PATH` to `/usr/local/share/sbx/bin/`, and that this directory is read-only.
 
 ## Risks / Trade-offs
 
-- [`--override-config` might change `devcontainerId` or not merge as assumed] → task 1.1 spikes this first, on the host. Fallback: pass the generated file as `--config`. That changes the id once, so a one-time Claude re-login and cold caches. Document the cleanup of the old volumes.
-- [Claude may still show its one-time bypass-mode confirmation, or ignore `defaultMode` from managed settings] → task 2.2 checks both. Fallback: add `skipDangerousModePermissionPrompt` to the baked settings. If neither works, a host alias that adds the flag.
+- [Claude may still show its one-time bypass-mode confirmation, or ignore `defaultMode` or `skipDangerousModePermissionPrompt` from managed settings] → task 1.2 checks both. Fallback: a `bin/claude` wrapper in the bundle that adds `--dangerously-skip-permissions`. That covers the CLI only; ACP still depends on the settings.
 - [`host-network` defaulting to off removes access that exists today, such as opencode talking to a model server on the host] → set `host-network = on` in that project's config. Nothing in the sandbox's own launch path needs it, because `devcontainer exec` goes through the Docker socket on the host.
-- [opencode's plugin API or `OPENCODE_CONFIG_DIR` loading may not work as assumed, or may change upstream] → task 2.3 checks that the baked plugin blocks `git commit` with the policy message. If it cannot be loaded from outside the workspace, opencode ships without the guard: the guard is ergonomics, not containment (`.devcontainer/CLAUDE.md` section 6), the policy text still applies, and the read-only mount still enforces.
+- [opencode's plugin API or `OPENCODE_CONFIG_DIR` loading may not work as assumed, or may change upstream] → task 1.3 checks that the baked plugin blocks `git commit` with the policy message. If it cannot be loaded from outside the workspace, opencode ships without the guard: the guard is ergonomics, not containment (`.devcontainer/CLAUDE.md` section 6), the policy text still applies, and the read-only mount still enforces.
 - [An IPv4 range opens every address in it with one approval] → the /16 floor, the private-range ban, and the approval delta listing each range.
 - [The approval gate is trust-on-first-use, so a user who confirms without reading widens the sandbox] → the prompt lists every added host, range, and mount explicitly, and defaults to No.
 - [Shipped defaults with no tools make the first `sbx claude` in a new project fail with command-not-found] → this is intended. The README shows the one-line `.sbx/config` and the option to add `claude` to the defaults file.
 - [Image count grows with distinct tool combinations] → base layers are shared. Prune old images with `docker images sbx-img`, which the README covers.
-- [The volume prefix stays `claude-code-` for non-Claude tools] → this is accepted to keep existing volume names, and with them existing Claude credentials. Renaming the prefix can be its own change.
-
-## Migration Plan
-
-1. After implementation, add `tools = claude` (plus `opencode` where used) to the defaults file or to each project's `.sbx/config`. Projects that relied on reaching the Docker host also need `host-network = on`.
-2. Run `sbx --up` once per project. It recreates the container from the new image, and if task 1.1 holds, keeps the existing volumes.
-3. Replace `sbx-up`, `sbx-claude`, `sbx-resume`, and `sbx-opencode` in `.bashrc` with `~/tools/sandbox/bin` on `PATH`. Change editor ACP configs from `sbx-acp.sh` to `sbx-acp.sh claude` (or `sbx-acp.sh opencode`).
-4. Rollback: check out the previous commit and use the old `.bashrc` functions. The new image cannot be started without `sbx`.
