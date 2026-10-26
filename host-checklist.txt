@@ -1,0 +1,46 @@
+Host checklist (1.1 and 1.2 are done; 1.3 needs redoing under its new wording)
+
+  0. Rebuild, because the bundle changed: sbx --rebuild --up in an opencode project.
+  1. 1.3
+     - [x] With tools = opencode only: the approval prompt adds models.opencode.ai and no api.anthropic.com, and postStart prints VERIFIED.
+     - Add allow = api.anthropic.com, which should prompt again. Then sbx opencode:
+       - it answers a prompt with no EROFS errors
+       - the session shows the sandbox policy loaded
+       - asking it to git commit shows the guard message
+  2. 2.1
+     - Without the policy mount, the container stops and docker logs names the unreadable whitelist.
+     - With host-network unset, curl to a server on the Docker gateway is rejected; with host-network = on, it succeeds.
+     - allow = <public IPv4> makes that address reachable.
+  3. 3.3
+     - sbx alone prints usage and creates no container.
+     - sbx claude --resume resumes.
+     - A second sbx bash attaches without killing the first.
+     - sbx opencode in a claude-only project exits 127.
+     - sbx -- --rebuild runs --rebuild as a command.
+     - Editing .sbx/config prompts and recreates the container.
+     - sbx echo hi 2>/dev/null prints only hi.
+     - docker ps shows sbx-<slug>, and the name survives a recreate.
+  4. 3.4
+     - In an approved project with tools = claude opencode, sbx-acp.sh claude and sbx-acp.sh opencode each serve an editor session.
+     - An unapproved project fails with the "run sbx --up once" message.
+     - sbx-acp.sh opencode in a claude-only project fails, naming claude.
+  5. 4.1
+     - VERIFIED with tools =, with tools = claude, with tools = claude opencode, and with tools = opencode (check 3 should now probe models.opencode.ai).
+     - VERIFIED with allow = example.com.
+     - VERIFIED after disabling opencode in a project that used it.
+  6. 4.2
+     - Every new check passes.
+     - touch .sbx/x inside the container fails.
+     - A temporary override that drops the read-only .sbx bind makes verify FAIL.
+7. 4.3
+     - allow = example.com makes it reachable; removing the line and running sbx --up blocks it again.
+     - deny = developers.cloudflare.com blocks that host.
+     - mount = <dir> is read-only and mount = <dir>:rw is writable (check with sbx curl … and sbx touch …).
+  8. 5.1
+     - With no .sbx/ and the shipped defaults, sbx --up prints VERIFIED.
+     - With tools = claude, docker volume ls and docker ps show only sbx-* volumes and the sbx-* container for the project.
+     - After logging in once, Claude stays logged in across sbx --rebuild --up.
+     - Re-run openspec validate add-configurable-agents --strict; it passes here already.
+
+  Left for you on the host: the changes are unstaged in the working tree. Committing has to happen outside the sandbox because .git is mounted read-only in here:
+

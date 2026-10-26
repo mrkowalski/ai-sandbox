@@ -34,6 +34,15 @@ Each tool SHALL be defined by one bundle directory, enabled as a unit when a con
 - **WHEN** a project enables `opencode`
 - **THEN** opencode's baked config and guard plugin are in effect with no project file, and disabling `opencode` removes them with it
 
+### Requirement: Bundles require only hosts every configuration needs
+
+A bundle's required hosts and reachability probe SHALL name only endpoints the tool needs under every configuration. A host the user chooses, such as an agent's model provider, SHALL NOT be a bundle host; the project config adds it with `allow`.
+
+#### Scenario: Agent with a user-chosen model provider
+
+- **WHEN** a project enables only `opencode`
+- **THEN** no model provider's API is reachable until the project allows one, and verification does not require one to be reachable
+
 ### Requirement: Bundles can ship scripts
 
 A bundle SHALL be able to ship executable scripts that are on `PATH` ahead of the tools' own binaries whenever the bundle is enabled, both for `sbx <cmd>` and for ACP commands. A script MAY have the same name as one of the bundle's own binaries and wrap it, which is how a bundle adds default arguments to its binary. A bundle SHALL also be able to ship aliases and functions that interactive shells load.

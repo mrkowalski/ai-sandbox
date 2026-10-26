@@ -35,7 +35,7 @@ sbx [--rebuild] --up
 ```bash
 sbx claude              # Claude Code, permission prompts bypassed by its baked settings
 sbx claude --resume
-sbx opencode
+sbx opencode            # also needs its model provider's host, e.g. `allow = api.anthropic.com`
 sbx bash                # a shell; a second sbx in another terminal joins the same container
 sbx --up                # bring the container up (and approve a new config) without running anything
 sbx --rebuild claude    # rebuild the image without cache (refreshes tools pinned to latest), then run
@@ -65,6 +65,7 @@ Example `.sbx/config`:
 
 ```
 tools = claude opencode
+allow = api.openai.com       # a model provider for opencode (claude brings api.anthropic.com)
 allow = example.com
 allow = 203.0.113.0/24       # a provider reached by address range
 deny = developers.cloudflare.com
@@ -87,7 +88,7 @@ Each tool is one directory under `.devcontainer/tools/<name>/`, enabled as a uni
 | `install-root.sh` | optional; runs as root at build; baked settings, hooks, plugins under `/etc` |
 | `bin/` | optional scripts, first on `PATH`: helpers, or a wrapper with the same name as the tool's binary that `exec`s it with extra arguments. Wrappers are how a bundle aliases a command, since `sbx <cmd>` and ACP run no interactive shell. A script may not shadow a base command or another bundle's script; the build fails |
 | `shell.sh` | optional aliases and functions for interactive shells (`sbx bash`) only |
-| `allowed-domains.txt` | hostnames and public IPv4 ranges the tool requires |
+| `allowed-domains.txt` | hostnames and public IPv4 ranges the tool requires whatever the project's configuration; not a model provider the user chooses, which the project adds with `allow` |
 
 `tool.conf` keys:
 

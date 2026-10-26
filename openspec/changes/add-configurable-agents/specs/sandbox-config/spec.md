@@ -80,6 +80,12 @@ The effective whitelist SHALL be the defaults' `allow` entries, plus the hostnam
 - **WHEN** a project enables `claude` and allows nothing else
 - **THEN** the effective whitelist contains the default domains plus Claude Code's API and telemetry hosts
 
+#### Scenario: Agent whose model provider is the user's choice
+
+- **WHEN** a project enables only `opencode` and allows nothing else
+- **THEN** the effective whitelist contains the default domains plus opencode's model catalogue host and no model provider's API
+- **AND** adding `allow = api.anthropic.com` (or another provider's host) is what lets opencode reach a model
+
 #### Scenario: Denying a tool's domain
 
 - **WHEN** a project enables `claude` and denies `api.anthropic.com`

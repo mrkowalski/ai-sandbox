@@ -1,5 +1,6 @@
-# The Anthropic provider's API.
-api.anthropic.com
-
 # The model catalogue opencode fetches at start (models.dev).
 models.opencode.ai
+
+# No model provider: opencode works with any, so the project chooses one with
+# `allow` in its .sbx/config (e.g. `allow = api.anthropic.com`). A provider
+# here could not be denied, and every project would reach it.

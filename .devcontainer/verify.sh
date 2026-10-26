@@ -25,7 +25,8 @@
 # and that the writable mounts the container is granted are the ones intended,
 # and no more:
 #
-#   6. npm's and uv's cache directories are writable *and* exec-capable
+#   6. npm's and uv's cache directories, and each tool's `*TMPDIR` env
+#      target, are writable *and* exec-capable
 #   7. The base volumes and every installed tool's state volumes are named for
 #      this workspace: `sbx-<kind>-<slug>-<devcontainerId>` and
 #      `sbx-<tool>-<kind>-<slug>-<devcontainerId>`, with the slug re-derived
@@ -545,7 +546,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Check 3: the Anthropic endpoints Claude Code needs are reachable
+# Check 3: each installed tool's declared probe endpoint is reachable
 # ---------------------------------------------------------------------------
 section "Installed tools' endpoints must be reachable"
 
@@ -742,6 +743,19 @@ command -v uv >/dev/null 2>&1 && UV_CACHE=$(uv cache dir 2>/dev/null | tail -n 1
 check_cache_dir "$UV_CACHE" "uv cache" "'uv cache dir'" \
   "'uv run' fails with EROFS" \
   "'uv run' and 'uvx' fail with exit 126"
+
+# A tool `env` entry whose key ends in TMPDIR redirects where the tool unpacks
+# and loads native code (opencode: Bun's BUN_TMPDIR), away from the noexec
+# /tmp. Its target has the same two failure modes as the caches above.
+for t in "${INSTALLED_TOOLS[@]}"; do
+  while IFS= read -r e; do
+    case "${e%%=*}" in
+      *TMPDIR) check_cache_dir "${e#*=}" "$t ${e%%=*}" "tool.conf env" \
+                 "$t fails writing its unpacked libraries" \
+                 "$t fails with 'failed to map segment from shared object'" ;;
+    esac
+  done < <(conf_values "$(tool_conf "$t")" env)
+done
 
 # ---------------------------------------------------------------------------
 # Check 7: the named volumes belong to this workspace
