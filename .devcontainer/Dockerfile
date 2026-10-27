@@ -5,7 +5,7 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM node:24-trixie-slim
 
-ARG PYTHON_VERSION=3.13
+ARG PYTHON_VERSION=3.14
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   less \
