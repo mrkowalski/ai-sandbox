@@ -2,26 +2,26 @@
 
 ## Repo
 
-- Definition of a headless Docker dev container that sandboxes Claude Code. Not an application: no source tree, no package manifest.
-- Deliverable: `.devcontainer/`. README and `openspec/` describe or plan it.
-- Goal: `claude --dangerously-skip-permissions` is safe. Agent sees only the bind-mounted project, reaches only whitelisted hosts, cannot `git push` or write `.git`. Cost is the only remaining risk.
+- Definition of a headless Docker dev container that sandboxes coding agents (Claude Code, opencode). Not an application: no source tree, no package manifest.
+- Deliverable: `.devcontainer/` (base image, tool bundles in `tools/`, defaults in `sbx-defaults.conf`) and the host launcher (`bin/sbx`, `sbx-env.sh`, `sbx-acp.sh`). README and `openspec/` describe or plan it.
+- Goal: an agent running with permission prompts off is safe. Agent sees only the bind-mounted project, reaches only whitelisted hosts, cannot `git push` or write `.git`. Cost is the only remaining risk.
 - Test suite: `verify.sh`.
 - Enforcement files and their rationale: `.devcontainer/CLAUDE.md` (auto-loaded under that dir). Read before editing anything there; every change there changes the sandbox's guarantees.
 
 ## Inside the sandbox (`$DEVCONTAINER=true`)
 
 - No `docker`, `podman`, or `devcontainer` CLI: cannot build, run, or rebuild the container.
-- Rootfs read-only. Writable: project folder (at its host path), `/tmp`, `/commandhistory`, `/home/node/.claude`, `/home/node/.npm`, `/home/node/.cache/uv`.
+- Rootfs read-only. Writable: project folder (at its host path), `/tmp`, `/commandhistory`, `/home/node/.npm`, `/home/node/.cache/uv`, plus each installed tool's declared volumes and tmpfs (e.g. `/home/node/.claude`). `.sbx/` and `/usr/local/etc/sbx` are read-only.
 - Project `.git` is mounted read-only: commit, stage, stash, etc. fail by design.
 - `/tmp` is `noexec` tmpfs: anything executed from there exits 126.
 - `/usr/local/bin/*` are the image's baked copies. Editing `.devcontainer/*.sh` has no effect until a host-side rebuild.
 - Egress default-deny: a failed fetch is usually the firewall working.
-- Host-only commands (`/usr/local/etc/host-only-commands.txt`): follow `/etc/claude-code/CLAUDE.md`.
+- Host-only commands (`/usr/local/etc/host-only-commands.txt`): follow the sandbox policy (`/etc/sbx/sandbox-policy.md`).
 - You cannot verify changes to `.devcontainer/`. State explicitly what was not tested; the user tests on the host.
 
 ## Host-side (user only)
 
-- Launch: `sbx-up`, then `sbx-claude` (README shell functions). Plain `devcontainer up` without `SBX_SLUG` creates stray volumes.
+- Launch: `sbx <cmd>` (e.g. `sbx claude`), `sbx --up` to bring up and approve a config, `sbx --rebuild` to rebuild without cache; editors use `sbx-acp.sh <tool>`. A bare `devcontainer up` has no policy mount and stops at start.
 - `verify.sh` runs twice per start:
   - entrypoint: `--iptables-only`, start-time gate
   - `postStartCommand`: full run
@@ -35,7 +35,7 @@
 ## Fail-closed
 
 - Failed firewall install: entrypoint exits before `exec`, container stops, nothing to `devcontainer exec` into. Reason in `docker logs <container>`.
-- Aborted `init-firewall.sh` (initial or `sudo` re-run, e.g. unresolvable whitelist entry): container sealed, all policies DROP, loopback only.
+- Aborted `init-firewall.sh` (initial or `sudo` re-run, e.g. unresolvable whitelist entry or no policy mount): container sealed, all policies DROP, loopback only.
 - Shell in an image that will not start (host operator only):
 
   ```bash
@@ -50,7 +50,7 @@
 - `openspec` CLI, `openspec-*` skills, `/opsx:*` commands.
 - Active: `openspec/changes/<name>/` (`proposal.md`, `design.md`, `specs/<capability>/spec.md`, `tasks.md`). Archived: `openspec/changes/archive/`.
 - Archive holds implemented and abandoned changes; the proposal header marks abandoned ones.
-  - Abandoned, 0 tasks done: `add-podman-support` (sandbox is Docker-only), `add-sbx-launcher` (launcher is still the README shell functions).
+  - Abandoned, 0 tasks done: `add-podman-support` (sandbox is Docker-only), `add-sbx-launcher` (superseded by `add-configurable-agents`).
 - Source of truth for implemented behaviour: `openspec/specs/`. Absent from there = not built.
 - Planning skills never edit `.devcontainer/`. Implement only on explicit follow-up request.
 

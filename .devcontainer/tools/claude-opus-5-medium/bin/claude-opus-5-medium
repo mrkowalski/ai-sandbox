@@ -1,0 +1,25 @@
+#!/bin/bash
+#
+# claude-opus-5-medium - Claude Code with model claude-opus-5,
+# CLAUDE_CODE_EFFORT_LEVEL=medium and the classic renderer (`/tui default`).
+# Arguments are passed through to claude.
+#
+# The fullscreen renderer draws on the alternate screen, which tmux keeps out
+# of the pane's scrollback, so `capture-pane -S -` gets no transcript.
+# CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1 keeps output on the main screen and
+# overrides a saved "tui": "fullscreen" setting. Running `/tui fullscreen` in a
+# session still switches: claude relaunches itself without the variable.
+#
+# Invocation: sbx claude-opus-5-medium [claude args...]
+
+set -euo pipefail
+
+command -v claude >/dev/null 2>&1 || {
+  printf 'claude-opus-5-medium: claude is not installed; enable the claude bundle too (tools = claude claude-opus-5-medium)\n' >&2
+  exit 127
+}
+
+export ANTHROPIC_MODEL=claude-opus-5
+export CLAUDE_CODE_EFFORT_LEVEL=medium
+export CLAUDE_CODE_DISABLE_ALTERNATE_SCREEN=1
+exec claude "$@"

@@ -2,12 +2,22 @@
 #
 # init-firewall.sh - install the default-deny egress firewall for the sandbox.
 #
-# Builds an `allowed-domains` ipset from the hostnames listed in the whitelist
-# file, then sets every iptables chain policy to DROP and accepts only traffic
-# matching that set.
+# Builds an `allowed-domains` ipset from the whitelist file, then sets every
+# iptables chain policy to DROP and accepts only traffic matching that set.
+# Hostname entries are resolved; IPv4 address and CIDR entries are added as
+# given, with no DNS lookup.
 #
-# The whitelist is read from $ALLOWED_DOMAINS_FILE, defaulting to
-# /usr/local/etc/allowed-domains.txt.
+# The policy is host-resolved and bind-mounted read-only by the launcher; the
+# image ships /usr/local/etc/sbx empty, so a launch without the mount aborts
+# here and stays sealed:
+#
+#   /usr/local/etc/sbx/allowed-domains.txt  the whitelist ($ALLOWED_DOMAINS_FILE
+#                                           overrides the path)
+#   /usr/local/etc/sbx/firewall.conf        HOST_NETWORK=1 accepts the Docker
+#                                           host's /24; missing, any other
+#                                           value, or no file means 0
+#
+# The flag is read with grep, never sourced: the file is data, not code.
 #
 # GUARANTEE: this script never leaves the container with more network access
 # than it found. Two things make that true, and neither depends on the caller:
@@ -74,7 +84,8 @@ seal() {
 }
 trap seal EXIT
 
-ALLOWED_DOMAINS_FILE="${ALLOWED_DOMAINS_FILE:-/usr/local/etc/allowed-domains.txt}"
+ALLOWED_DOMAINS_FILE="${ALLOWED_DOMAINS_FILE:-/usr/local/etc/sbx/allowed-domains.txt}"
+FIREWALL_CONF=/usr/local/etc/sbx/firewall.conf
 
 if [ ! -r "$ALLOWED_DOMAINS_FILE" ]; then
     echo "ERROR: whitelist file not found or unreadable: $ALLOWED_DOMAINS_FILE" >&2
@@ -133,7 +144,17 @@ if [ -z "$domains" ]; then
     exit 1
 fi
 
+IPV4_RE='^[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}\.[0-9]{1,3}(/[0-9]{1,2})?$'
+
 for domain in $domains; do
+    if [[ "$domain" =~ $IPV4_RE ]]; then
+        # The launcher has already rejected private and over-wide ranges; an
+        # entry ipset still refuses aborts here, sealed.
+        echo "Adding $domain as given"
+        ipset add -exist allowed-domains "$domain"
+        continue
+    fi
+
     echo "Resolving $domain..."
     ips=$(dig +noall +answer A "$domain" | awk '$4 == "A" {print $5}')
     if [ -z "$ips" ]; then
@@ -153,19 +174,27 @@ for domain in $domains; do
     done < <(echo "$ips")
 done
 
-# Get host IP from default route
-HOST_IP=$(ip route | grep default | cut -d" " -f3)
-if [ -z "$HOST_IP" ]; then
-    echo "ERROR: Failed to detect host IP" >&2
-    exit 1
+# The Docker host's /24 is opt-in (config `host-network = on`). Off, a service
+# on the host is as unreachable as any other non-whitelisted address.
+HOST_NETWORK_FLAG=0
+if [ -r "$FIREWALL_CONF" ] && grep -qx 'HOST_NETWORK=1' "$FIREWALL_CONF"; then
+    HOST_NETWORK_FLAG=1
 fi
 
-HOST_NETWORK=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
-echo "Host network detected as: $HOST_NETWORK"
+if [ "$HOST_NETWORK_FLAG" -eq 1 ]; then
+    HOST_IP=$(ip route | grep default | cut -d" " -f3)
+    if [ -z "$HOST_IP" ]; then
+        echo "ERROR: Failed to detect host IP" >&2
+        exit 1
+    fi
 
-# Set up remaining iptables rules
-iptables -A INPUT -s "$HOST_NETWORK" -j ACCEPT
-iptables -A OUTPUT -d "$HOST_NETWORK" -j ACCEPT
+    HOST_SUBNET=$(echo "$HOST_IP" | sed "s/\.[0-9]*$/.0\/24/")
+    echo "Host network access enabled: $HOST_SUBNET"
+    iptables -A INPUT -s "$HOST_SUBNET" -j ACCEPT
+    iptables -A OUTPUT -d "$HOST_SUBNET" -j ACCEPT
+else
+    echo "Host network access disabled"
+fi
 
 # The policies were already set to DROP in step 2; re-assert them here so the
 # final state is stated in one place and a future edit to the block above

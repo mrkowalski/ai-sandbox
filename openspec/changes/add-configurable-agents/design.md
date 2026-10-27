@@ -28,7 +28,7 @@ Greenfield: no migration and no backwards compatibility. Existing sandbox volume
 | `NET_ADMIN`/`NET_RAW`, the two sudoers entries | base | needed to install the firewall; node cannot use them beyond the two scripts, which only read read-only policy |
 | git, gh, node/npm, uv/python, jq, openspec | base | harmless without egress or credentials |
 | npm, uv, and bash-history volumes | base | per project, no new reach |
-| Egress hostnames and public IPv4 ranges, including npm, PyPI, and Anthropic | config `allow`/`deny` | every entry is an exfiltration path |
+| Egress hostnames and public IPv4 ranges, including npm, PyPI, and a model provider for an agent that lets the user choose one | config `allow`/`deny` | every entry is an exfiltration path |
 | Tools (bundle: binary, baked files and hooks, scripts and aliases, ACP entry, hosts and IPv4 ranges, state volumes, writable directories) | config `tools` | reach comes through their hosts and stored credentials |
 | Docker-host /24 | config `host-network`, default off | reaches services on the host |
 | Extra host folders | config `mount`, read-only default | exposes host data |
@@ -43,7 +43,7 @@ The shipped `.devcontainer/sbx-defaults.conf` contains `tools =` (none) and `all
 - Any further files the install scripts copy (config templates, hook scripts, plugins). They end up in the read-only rootfs, never in a volume or the workspace.
 - `bin/` (optional): executable scripts. The build copies every selected bundle's `bin/*` into `/usr/local/share/sbx/bin/`, which the base puts first on `PATH`, ahead of the npm prefix. Two bundles shipping the same name fail the build, and so does a name that shadows a base command (anything on the base image's `PATH`, such as `git` or `verify.sh`) other than one of the bundle's own `bin` entries. A script is either a helper command or a wrapper with the same name as the tool's binary that `exec`s the real binary by absolute path with extra arguments. Wrappers are how a bundle aliases a command: `sbx <cmd>` and ACP run no interactive shell, so bash aliases never apply there.
 - `shell.sh` (optional): aliases and functions for interactive shells only (`sbx bash`). The base `/etc/bash.bashrc` sources `/usr/local/share/sbx/tools/<name>/shell.sh` for each entry in `tools.list`.
-- `allowed-domains.txt`: the hostnames, and public IPv4 addresses or CIDR ranges, the tool requires. Same validation as config `allow`.
+- `allowed-domains.txt`: the hostnames, and public IPv4 addresses or CIDR ranges, the tool requires under every configuration. Same validation as config `allow`. A bundle host cannot be denied, so a host the user chooses, such as a model provider, is not a bundle host; the project adds it with `allow`.
 - `tool.conf`: the same parser as the config. Keys:
   - `type = agent | tool` (required). An `agent` must also declare `acp` and must load the sandbox policy.
   - `bin` (repeatable, checked on `PATH`).
@@ -67,8 +67,9 @@ There is no start command. The rootfs stays read-only, so a tool's write outside
 - `type = agent`, `acp = opencode acp`.
 - Installs `npm i -g opencode-ai`.
 - Bakes `/etc/sbx/opencode/` and sets `env = OPENCODE_CONFIG_DIR=/etc/sbx/opencode`. It holds `opencode.json` with `instructions: ["/etc/sbx/sandbox-policy.md"]`, and `plugin/host-only-guard.js`, a `tool.execute.before` plugin that hands each bash command to the base matcher and throws its message on a match.
-- Declares volumes for `~/.config/opencode` and `~/.local/share/opencode`, and a `volume` or `tmpfs` for each further directory it writes (such as `~/.cache/opencode` and `~/.local/state/opencode`), as found in task 1.3.
-- Its domains are confirmed in task 1.3.
+- Declares volumes for `~/.config/opencode`, `~/.local/share/opencode`, `~/.local/state/opencode`, and `~/.cache/opencode`: the four directories it wrote on the read-only rootfs in task 1.3 (opencode 1.19.4). The cache holds binaries it downloads and executes, so it is a volume, not a noexec tmpfs.
+- Domains (task 1.3): `models.opencode.ai` (model catalogue) only, and `probe = https://models.opencode.ai/`. opencode works with any model provider, so the bundle names none: the project adds its provider with `allow` (`api.anthropic.com`, `api.openai.com`, ...) or reaches a model server on the host with `host-network = on`. A bundle-owned provider could not be denied and would open Anthropic to every opencode project. With no provider allowed, opencode starts and its requests to the model fail. `registry.npmjs.org`, which it uses for a background install of `@opencode-ai/plugin` into `~/.config/opencode`, is a warning only and stays in the defaults rather than the bundle. It downloads ripgrep from `github.com` unless `rg` is on `PATH`, so `install-root.sh` installs Debian's `ripgrep`; this is the one bundle that adds a system package.
+- Task 1.3 confirmed the plugin loads from a read-only `OPENCODE_CONFIG_DIR` and blocks `git commit` with the `host-only-check` message, and that the policy reaches the system prompt through `instructions`. The plugin imports nothing from `@opencode-ai/plugin`, since that package is installed in the background and may be absent.
 
 `sandbox-policy.md` becomes agent-neutral, at `/etc/sbx/sandbox-policy.md` in the base.
 
@@ -81,7 +82,7 @@ There is no start command. The rootfs stays read-only, so a tool's write outside
 - `tools`: space-separated; the project value replaces the default.
 - `allow`, `deny`: repeatable, one entry each. An entry is a hostname, validated against `^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)+$`, or an IPv4 address or CIDR range with a prefix of /16 or longer. Private, loopback, link-local, CGNAT, and multicast ranges are rejected: the Docker host is reached through `host-network` only. Bundle `allowed-domains.txt` entries get the same validation.
 - `host-network`: `on` or `off`.
-- `mount`: repeatable, `<abs path>[:rw]`. The path is resolved with `realpath`, and ancestry is checked on resolved paths so a symlink cannot sneak past the protected-path rule. Protected from `:rw`: this repo and `~/.local/state/sbx`, and every ancestor of either.
+- `mount`: repeatable, `<abs path>[:rw]`. The path is resolved with `realpath`, and ancestry is checked on resolved paths so a symlink cannot sneak past the protected-path rule; the resolved path is the bind source and target. Protected from `:rw`: this repo and `~/.local/state/sbx`, every ancestor of either, and everything inside them. Refused in any mode, because the bind lands at the same path inside the container: a container system path (`/usr`, `/etc`, `/home/node`, `/tmp`, ...), any ancestor of one, an ancestor of the workspace (it would cover the read-only `.git` and `.sbx` binds), and a path containing `,`, `$`, quotes, `\`, or `=` (they break or are interpolated in the devcontainer mount string).
 
 *Alternatives:* YAML/TOML would need `yq` or Python on the host. JSON/`jq` is unfriendly to hand-edit and has no comments.
 

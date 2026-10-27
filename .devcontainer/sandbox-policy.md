@@ -50,11 +50,12 @@ write. Do not stage them; the user stages and commits on the host, and an
 unstaged working tree is exactly what they need to do that. To move or delete
 files use plain `mv` and `rm` rather than `git mv` and `git rm`.
 
-If you attempt one of these anyway, a guard blocks it before it runs and hands
-you the same explanation. Relay that to the user; do not retry it, reword it to
-get past the guard, or work around it.
+If you attempt one of these anyway, a guard may block it before it runs and
+hand you the same explanation; where no guard is installed, the command simply
+fails. Either way, relay that to the user; do not retry it, reword it to get
+past the guard, or work around it.
 
-That message names a single-invocation bypass (`HOST_ONLY_GUARD_BYPASS=1`). It
+The guard's message names a single-invocation bypass (`HOST_ONLY_GUARD_BYPASS=1`). It
 exists so the *user* can override a mistaken or over-broad entry. It is not
 yours to reach for, and on a git command it buys nothing: it gets you past the
 guard and into the same read-only mount, so the command fails anyway - just

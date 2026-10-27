@@ -5,8 +5,7 @@ FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
 FROM node:24-trixie-slim
 
-ARG CLAUDE_CODE_VERSION=latest
-ARG PYTHON_VERSION=3.13
+ARG PYTHON_VERSION=3.14
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
   less \
@@ -47,45 +46,38 @@ RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhisto
 # Set `DEVCONTAINER` environment variable to help with orientation
 ENV DEVCONTAINER=true
 
-# /workspace gets overriden by the devcontainer
-RUN mkdir -p /workspace /home/node/.claude && \
-  chown -R node:node /workspace /home/node/.claude
+# /workspace gets overriden by the devcontainer. ~/.npm is a volume mount point;
+# pre-created so the first mount inherits node's ownership.
+RUN mkdir -p /workspace /home/node/.npm && \
+  chown -R node:node /workspace /home/node/.npm
 
 WORKDIR /workspace
 
 USER node
 
-# Install global packages
+# Install global packages. Bundle scripts (/usr/local/share/sbx/bin) come first
+# on PATH so a bundle wrapper wins over the binary it wraps.
 ENV NPM_CONFIG_PREFIX=/usr/local/share/npm-global
-ENV PATH=$PATH:/usr/local/share/npm-global/bin
+ENV PATH=/usr/local/share/sbx/bin:$PATH:/usr/local/share/npm-global/bin
 
 ENV EDITOR=vim
 ENV VISUAL=vim
 
-# Claude code - no updates and no checks
-ENV DISABLE_UPDATES=1
-ENV DISABLE_AUTOUPDATER=1
-
 # OpenSpec telemetry
 ENV OPENSPEC_TELEMETRY=0
 
-RUN npm install -g @anthropic-ai/claude-code@${CLAUDE_CODE_VERSION}
-RUN npm install -g @agentclientprotocol/claude-agent-acp
 RUN npm install -g @fission-ai/openspec@latest
 
 COPY init-firewall.sh /usr/local/bin/
 COPY entrypoint.sh /usr/local/bin/
 COPY verify.sh /usr/local/bin/
-COPY host-only-guard.sh /usr/local/bin/
-COPY allowed-domains.txt /usr/local/etc/
+COPY host-only-check /usr/local/bin/
 COPY host-only-commands.txt /usr/local/etc/
 
-# Claude Code managed policy. This path is on the read-only rootfs and outside
-# the bind-mounted workspace, so the PreToolUse guard and the sandbox policy
-# apply to whichever project is mounted at /workspace and cannot be switched
-# off from inside it.
-COPY managed-settings.json /etc/claude-code/
-COPY sandbox-policy.md /etc/claude-code/CLAUDE.md
+# The agent-neutral sandbox policy, on the read-only rootfs and outside the
+# workspace. Each agent bundle points its agent at it (or copies it where the
+# agent looks), so no project can switch it off.
+COPY sandbox-policy.md /etc/sbx/sandbox-policy.md
 USER root
 
 # uv and a uv-managed Python, baked into the read-only rootfs. Interpreter
@@ -111,14 +103,19 @@ ENV UV_PYTHON_DOWNLOADS=never \
     UV_CACHE_DIR=/home/node/.cache/uv \
     UV_LINK_MODE=copy
 
-RUN echo 'export PATH="$PATH:/usr/local/share/npm-global/bin"' \
+# Login shells reset PATH in /etc/profile, so the ENV PATH above is restated.
+#
+# /usr/local/etc/sbx is an empty mount point: the image carries no whitelist.
+# The launcher binds the host-resolved policy (allowed-domains.txt,
+# firewall.conf) over it read-only; a launch without that bind aborts firewall
+# installation on the unreadable whitelist, and the container stops.
+RUN echo 'export PATH="/usr/local/share/sbx/bin:$PATH:/usr/local/share/npm-global/bin"' \
       > /etc/profile.d/npm-global-path.sh && \
     chmod 0644 /etc/profile.d/npm-global-path.sh && \
-    chmod 0644 /usr/local/etc/allowed-domains.txt && \
     chmod 0644 /usr/local/etc/host-only-commands.txt && \
-    chmod 0644 /etc/claude-code/managed-settings.json && \
-    chmod 0644 /etc/claude-code/CLAUDE.md && \
-    chmod +x /usr/local/bin/host-only-guard.sh && \
+    chmod 0644 /etc/sbx/sandbox-policy.md && \
+    mkdir -p /usr/local/etc/sbx && \
+    chmod +x /usr/local/bin/host-only-check && \
     chmod +x /usr/local/bin/init-firewall.sh && \
     chmod +x /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/verify.sh && \
@@ -126,6 +123,34 @@ RUN echo 'export PATH="$PATH:/usr/local/share/npm-global/bin"' \
     echo "node ALL=(root) NOPASSWD: /usr/local/bin/verify.sh" > /etc/sudoers.d/verify && \
     chmod 0440 /etc/sudoers.d/node-firewall && \
     chmod 0440 /etc/sudoers.d/verify
+
+# Interactive shells (`sbx bash`) load each installed bundle's shell.sh.
+# Appended after Debian's non-interactive early return, so `sbx <cmd>` and ACP
+# never see these; bundle wrappers in bin/ are what applies there.
+RUN printf '%s\n' \
+      '' \
+      '# sbx tool bundles' \
+      'if [ -r /usr/local/share/sbx/tools.list ]; then' \
+      '  while IFS= read -r _sbx_tool; do' \
+      '    if [ -r "/usr/local/share/sbx/tools/$_sbx_tool/shell.sh" ]; then' \
+      '      . "/usr/local/share/sbx/tools/$_sbx_tool/shell.sh"' \
+      '    fi' \
+      '  done < /usr/local/share/sbx/tools.list' \
+      '  unset _sbx_tool' \
+      'fi' >> /etc/bash.bashrc
+
+# Tool bundles (tools/<name>/), selected by the launcher through TOOLS. The
+# base command snapshot is taken before TOOLS is in scope, so every layer above
+# it is shared by every tool combination. See install-tools.sh for what a
+# bundle may install and what fails the build.
+COPY install-tools.sh /usr/local/share/sbx/install-tools.sh
+RUN bash /usr/local/share/sbx/install-tools.sh snapshot
+ARG TOOLS=
+COPY tools/ /usr/local/share/sbx/tools/
+USER node
+RUN bash /usr/local/share/sbx/install-tools.sh user $TOOLS
+USER root
+RUN bash /usr/local/share/sbx/install-tools.sh root $TOOLS
 
 # The enforcement point. An image ENTRYPOINT runs on every container start -
 # `docker start` and a post-reboot restart included - which is what postStartCommand

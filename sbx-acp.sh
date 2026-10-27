@@ -1,47 +1,59 @@
 #!/bin/bash
 #
-# sbx-acp.sh - expose the sandboxed Claude Code as an ACP agent server.
+# sbx-acp.sh - serve an enabled coding agent over ACP from inside the current
+# folder's sandbox.
+#
+# Guarantees:
+#   - a missing tool name, a tool with no bundle, a bundle that is not an
+#     agent, and an agent the resolved config does not enable are refused
+#     before anything runs, naming the enabled agents;
+#   - stdin and stdout belong to the agent: every diagnostic goes to stderr,
+#     which is appended to $SBX_ACP_LOG (default /tmp/sbx-acp.log);
+#   - the launch goes through `sbx`, so config validation, the approval gate,
+#     and container reuse are the same as for any other command. An unapproved
+#     project config is refused, since there is no terminal to approve it on.
+#
+# Usage (as an editor's agent command, from the project folder):
+#   sbx-acp.sh <tool>        e.g. sbx-acp.sh claude, sbx-acp.sh opencode
 
-set -uo pipefail
+set -euo pipefail
 
-SBX=~/tools/sandbox/.devcontainer/devcontainer.json
-SBX_ENV=~/tools/sandbox/sbx-env.sh
+SELF=$(readlink -f "${BASH_SOURCE[0]}")
+ROOT=$(dirname "$SELF")
 LOG=${SBX_ACP_LOG:-/tmp/sbx-acp.log}
 
-# stderr is not part of the ACP stream, so it is the one place a diagnostic can
-# go.
 exec 2>>"$LOG"
-echo "=== sbx-acp $(date -Is) pwd=$PWD ===" >&2
+echo "=== sbx-acp $(date -Is) pwd=$PWD args=$* ===" >&2
 
-# devcontainer.json names this project's volumes
-# `claude-code-<kind>-${localEnv:SBX_SLUG}-${devcontainerId}`. The id is what
-# keeps them isolated, and the CLI derives it from the workspace folder, so
-# launching without the slug exported is untidy rather than dangerous: the
-# volumes are named `claude-code-config--<id>`, are still this project's alone,
-# and are a second, stray set - no Claude Code credentials, a cold npm cache,
-# and nothing that mounts them again. verify.sh reports that shape by name, but
-# only for whoever runs verify.sh; nothing runs it at container start. Refusing
-# here is the earlier, clearer stop.
 # shellcheck source=sbx-env.sh
-if ! . "$SBX_ENV"; then
-    echo "sbx-acp: cannot source $SBX_ENV - refusing to launch unscoped" >&2
-    exit 1
+. "$ROOT/sbx-env.sh"
+
+die() { printf 'sbx-acp: %s\n' "$*" >&2; exit 1; }
+
+TOOL="${1:-}"
+[ "$#" -eq 1 ] && [ -n "$TOOL" ] || die "usage: sbx-acp.sh <tool>"
+
+sbx_resolve "$PWD" || die "invalid config for $PWD; nothing was started"
+
+enabled_agents() {
+    local t out=""
+    for t in "${SBX_TOOLS[@]}"; do
+        [ "${SBX_TOOL_TYPE[$t]:-}" = agent ] && out+="$t "
+    done
+    printf '%s' "${out% }"
+}
+
+mapfile -t AVAILABLE < <(sbx_available_tools)
+if ! sbx_in "$TOOL" "${AVAILABLE[@]}"; then
+    die "unknown tool '$TOOL' (enabled agents: $(enabled_agents | sed 's/^$/none/'))"
+fi
+if ! sbx_in "$TOOL" "${SBX_TOOLS[@]}"; then
+    die "'$TOOL' is not enabled for $PWD (enabled agents: $(enabled_agents | sed 's/^$/none/'))"
+fi
+if [ "${SBX_TOOL_TYPE[$TOOL]}" != agent ]; then
+    die "'$TOOL' is not an agent (enabled agents: $(enabled_agents | sed 's/^$/none/'))"
 fi
 
-if ! SBX_SLUG=$(sbx_slug); then
-    echo "sbx-acp: no workspace slug for $PWD - refusing to launch unscoped" >&2
-    exit 1
-fi
-export SBX_SLUG
-echo "sbx-acp: workspace slug $SBX_SLUG" >&2
-
-if ! devcontainer up --workspace-folder "$PWD" --config "$SBX" >>"$LOG" </dev/null; then
-    echo "sbx-acp: 'devcontainer up' failed - see $LOG" >&2
-    exit 1
-fi
-
-# Cosmetic, and deliberately not allowed to fail the launch: the container is
-# already up and the ACP stream is what the caller is waiting for.
-sbx_tag_image
-
-exec devcontainer exec --workspace-folder "$PWD" --config "$SBX" claude-agent-acp
+read -r -a ACP <<<"${SBX_TOOL_ACP[$TOOL]}"
+echo "sbx-acp: $TOOL -> ${ACP[*]}" >&2
+exec "$ROOT/bin/sbx" -- "${ACP[@]}"

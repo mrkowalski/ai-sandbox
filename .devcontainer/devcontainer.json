@@ -1,10 +1,7 @@
 {
-  "name": "Claude Code Sandbox",
+  "name": "sbx",
   "build": {
-    "dockerfile": "Dockerfile",
-    "args": {
-      "CLAUDE_CODE_VERSION": "latest"
-    }
+    "dockerfile": "Dockerfile"
   },
   "runArgs": [
     "--cap-add=NET_ADMIN",
@@ -15,15 +12,13 @@
   "remoteUser": "node",
   "initializeCommand": "mkdir -p '${localWorkspaceFolder}/.git'",
   "mounts": [
-    "source=claude-code-bashhistory-${localEnv:SBX_SLUG}-${devcontainerId},target=/commandhistory,type=volume",
-    "source=claude-code-config-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.claude,type=volume",
-    "source=claude-code-npm-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.npm,type=volume",
-    "source=claude-code-uv-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.cache/uv,type=volume",
+    "source=sbx-bashhistory-${localEnv:SBX_SLUG}-${devcontainerId},target=/commandhistory,type=volume",
+    "source=sbx-npm-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.npm,type=volume",
+    "source=sbx-uv-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.cache/uv,type=volume",
     "source=${localWorkspaceFolder}/.git,target=${localWorkspaceFolder}/.git,type=bind,readonly"
   ],
   "containerEnv": {
     "NODE_OPTIONS": "--max-old-space-size=4096",
-    "CLAUDE_CONFIG_DIR": "/home/node/.claude",
     "TZ": "Europe/Warsaw",
     "COLORTERM": "truecolor",
     "SBX_WORKSPACE": "${localWorkspaceFolder}"
