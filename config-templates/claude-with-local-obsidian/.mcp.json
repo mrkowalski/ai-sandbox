@@ -1,0 +1,11 @@
+{
+  "mcpServers": {
+    "obsidian-instancename": {
+      "type": "http",
+      "url": "http://172.17.0.1:27124/mcp/",
+      "headers": {
+        "Authorization": "Bearer <secret-bearer-from-obsidian-mcp-config>"
+      }
+    }
+  }
+}
