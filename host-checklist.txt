@@ -36,8 +36,8 @@ Host checklist (1.1 and 1.2 are done; 1.3 needs redoing under its new wording)
      - allow = example.com makes it reachable; removing the line and running sbx --up blocks it again.
      - deny = developers.cloudflare.com blocks that host.
      - mount = <dir> is read-only and mount = <dir>:rw is writable (check with sbx curl … and sbx touch …).
-  8. 5.1
-     - With no .sbx/ and the shipped defaults, sbx --up prints VERIFIED.
+8. 5.1
+     - [x] With no .sbx/ and the shipped defaults, sbx --up prints VERIFIED.
      - With tools = claude, docker volume ls and docker ps show only sbx-* volumes and the sbx-* container for the project.
      - After logging in once, Claude stays logged in across sbx --rebuild --up.
      - Re-run openspec validate add-configurable-agents --strict; it passes here already.

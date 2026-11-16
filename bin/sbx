@@ -187,7 +187,7 @@ fi
 [ "$rebuild" -eq 1 ] && remove=1
 
 export SBX_SLUG="$SLUG"
-up_args=(--workspace-folder "$WS" --config "$GEN")
+up_args=(--workspace-folder "$WS" --config "$GEN" --container-data-folder /tmp/devcontainer)
 [ "$remove" -eq 1 ] && up_args+=(--remove-existing-container)
 if ! devcontainer up "${up_args[@]}" </dev/null >&2; then
     die "the container did not come up, or post-start verification failed; see the output above and 'docker logs $NAME'. No command was run."
