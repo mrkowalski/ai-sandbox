@@ -198,4 +198,4 @@ sbx_tag_image "$WS"
 
 # 7. The command, verbatim.
 [ "$#" -gt 0 ] || exit 0
-exec devcontainer exec --workspace-folder "$WS" --config "$GEN" "$@"
+exec devcontainer exec --workspace-folder "$WS" --config "$GEN" -- "$@"
