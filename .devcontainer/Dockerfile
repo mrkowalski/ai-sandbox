@@ -1,9 +1,9 @@
-ARG UV_VERSION=0.9.0
+ARG UV_VERSION=0.13.9
 
 # Named stage so the version can come from an ARG; COPY --from cannot expand one.
 FROM ghcr.io/astral-sh/uv:${UV_VERSION} AS uv
 
-FROM node:24-trixie-slim
+FROM node:26-trixie-slim
 
 ARG PYTHON_VERSION=3.14
 
