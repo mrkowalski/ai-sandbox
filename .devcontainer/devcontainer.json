@@ -28,6 +28,6 @@
 
   "overrideCommand": false,
 
-  "postStartCommand": "sudo /usr/local/bin/init-firewall.sh && /usr/local/bin/verify.sh",
+  "postStartCommand": "timeout 120 sh -c 'until [ -f /tmp/.sandbox-firewall-installed ]; do sleep 0.2; done' && /usr/local/bin/verify.sh",
   "waitFor": "postStartCommand"
 }

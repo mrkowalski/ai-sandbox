@@ -35,10 +35,10 @@
 # sixty lines later) meant every abort path in between failed loudly in the log
 # and silently open on the wire.
 #
-# Invoked from the image ENTRYPOINT on every container start, again from
-# devcontainer.json's postStartCommand, and possibly by hand
-# (`sudo /usr/local/bin/init-firewall.sh`) in an already-running container. The
-# guarantee holds for all three.
+# Invoked from the image ENTRYPOINT on every container start, and possibly by
+# hand (`sudo /usr/local/bin/init-firewall.sh`) in an already-running container.
+# The guarantee holds for both. Nothing else may call it at start: a concurrent
+# run would race the entrypoint's gate (see .devcontainer/CLAUDE.md).
 #
 # Correctness of the resulting ruleset is asserted separately by verify.sh.
 
