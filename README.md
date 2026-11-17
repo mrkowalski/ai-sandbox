@@ -167,7 +167,3 @@ docker images sbx-img                               # content-tagged images, one
 docker image rm sbx-img:<hash>                      # prune an old one
 docker images | grep '^sbx-'                        # per-project tags
 ```
-
-### OpenSpec maintenance
-
-OpenSpec is the `openspec` bundle; this repo's `.sbx/config` enables it. Its skills and commands are installed globally on the host (`~/.claude`), not in this repo, so after bumping the npm package run `openspec update` on the host. Inside the sandbox `~/.claude` is a per-project volume, so the agent there does not see them.
