@@ -12,7 +12,7 @@ If a part only restricts the sandbox, or is harmless on its own, it is baked int
 | Read-only rootfs, `noexec` `/tmp`, read-only `.git` and `.sbx` binds | base | restricts |
 | No credentials, host-only list and shared matcher, sandbox policy text | base | restricts |
 | `NET_ADMIN`/`NET_RAW`, the two sudoers entries | base | needed to install the firewall; node cannot use them beyond the two scripts, which only read read-only policy |
-| git, gh, node/npm, uv/python, jq, openspec | base | harmless without egress or credentials |
+| git, gh, node/npm, uv/python, jq | base | harmless without egress or credentials |
 | npm, uv, and bash-history volumes | base | per project, no new reach |
 | Egress hostnames and public IPv4 ranges | config `allow`/`deny` | every entry is an exfiltration path |
 | Tools (bundles) | config `tools` | reach comes through their hosts and stored credentials |

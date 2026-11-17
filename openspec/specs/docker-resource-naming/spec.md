@@ -10,12 +10,13 @@ The sandbox's per-project named volumes SHALL carry a component derived from the
 
 The derivation SHALL be: take the absolute workspace path, strip the leading `/`, lowercase it, and replace every character outside `[a-z0-9_.-]` with `-`, evaluated bytewise so that a non-ASCII path yields a stable name rather than a locale-dependent one.
 
-That component SHALL lead the name, ahead of any uniqueness key, so that one project's volumes sort together in a listing.
+Every volume name SHALL begin with `sbx-`, followed by the tool name for a tool's state volume, then the kind of state. The workspace-path component SHALL follow, ahead of any uniqueness key, so that one project's volumes sort together in a listing.
 
 #### Scenario: A volume is attributable to its project
 
-- **WHEN** an operator lists Docker volumes on the host after launching the sandbox in `/home/<user>/tools/sandbox`
-- **THEN** the bash history, Claude Code config, npm cache, and uv cache volume names begin `claude-code-bashhistory-home-<user>-tools-sandbox`, `claude-code-config-home-<user>-tools-sandbox`, `claude-code-npm-home-<user>-tools-sandbox`, and `claude-code-uv-home-<user>-tools-sandbox`
+- **WHEN** an operator lists Docker volumes on the host after launching the sandbox in `/home/<user>/tools/sandbox` with `tools = claude opencode`
+- **THEN** the base volumes begin `sbx-bashhistory-home-<user>-tools-sandbox`, `sbx-npm-home-<user>-tools-sandbox`, and `sbx-uv-home-<user>-tools-sandbox`
+- **AND** the tool volumes begin `sbx-claude-config-home-<user>-tools-sandbox` for Claude Code and `sbx-opencode-<kind>-home-<user>-tools-sandbox` for each state directory opencode declares
 - **AND** filtering the listing on `home-<user>-tools-sandbox` returns that project's volumes and no others
 
 #### Scenario: A path that is not a legal volume name
@@ -30,36 +31,36 @@ Volume names SHALL also contain a uniqueness key supplied by the dev container t
 #### Scenario: Two projects do not share volumes
 
 - **WHEN** the sandbox is launched in two different workspace folders
-- **THEN** each launch mounts its own four volumes, and neither project's Claude Code credentials, session history, bash history, npm cache, or uv cache are visible to the other
+- **THEN** each launch mounts its own base and tool volumes, and neither project's tool credentials, session history, bash history, npm cache, or uv cache are visible to the other
 
 #### Scenario: A launcher that does not supply the workspace name
 
-- **WHEN** the sandbox is launched by something that does not supply the workspace-path component - a bare dev container launch outside the project's wrappers - so the volumes are named with an empty path component
+- **WHEN** the sandbox is launched by something that does not supply the workspace-path component - a bare dev container launch outside `sbx` - so the volumes are named with an empty path component
 - **THEN** the volumes it mounts are still scoped to that one workspace and are shared with no other project
-- **AND** they are a different set from the ones the wrappers mount for the same workspace, so that launch starts with no Claude Code credentials and cold npm and uv caches
+- **AND** they are a different set from the ones `sbx` mounts for the same workspace, so that launch starts with no tool credentials and cold npm and uv caches
 
 ### Requirement: The image carries the same name
 
-The image the sandbox runs SHALL be reachable on the host under a tag derived from the same workspace path as the volumes, so that images and volumes for one project sort and filter together.
+The image the sandbox runs SHALL be reachable on the host under a tag derived from the same workspace path as the volumes, so that images and volumes for one project sort and filter together. The same image SHALL also carry a content tag shared by every project that enables the same tools on the same sandbox revision.
 
 #### Scenario: The image is identifiable after launch
 
 - **WHEN** a sandbox launch completes for workspace `/home/<user>/tools/sandbox`
-- **THEN** `docker images` lists that container's image under the tag `sbx-home-<user>-tools-sandbox`
+- **THEN** `docker images` lists that container's image under the tag `sbx-home-<user>-tools-sandbox`, and under a content tag in the `sbx-img` repository
 
 #### Scenario: Relaunching does not accumulate tags
 
 - **WHEN** the same workspace is launched again after the image is rebuilt
-- **THEN** the tag names the new image, and the project has exactly one such tag rather than one per launch
+- **THEN** the per-project tag names the new image, and the project has exactly one such tag rather than one per launch
 
 ### Requirement: A volume name that is not this workspace's fails verification
 
-Verification SHALL assert, whenever the verification suite runs, that each of the four mounted volumes carries the workspace-path component derived from this container's own workspace folder, ahead of a non-empty uniqueness key. A name whose component is absent, does not match, or cannot be determined SHALL fail verification rather than warn: the volumes stay isolated either way, but a launcher that cannot name them does not know the naming rule, and this project fails loudly rather than degrading quietly.
+Verification SHALL assert, whenever the verification suite runs, that each mounted base and tool volume carries the workspace-path component derived from this container's own workspace folder, ahead of a non-empty uniqueness key. The expected set SHALL be the base volumes plus the state volumes declared by the tools installed in the image. A name whose component is absent, does not match, or cannot be determined SHALL fail verification rather than warn: the volumes stay isolated either way, but a launcher that cannot name them does not know the naming rule, and this project fails loudly rather than degrading quietly.
 
 #### Scenario: The naming is checked by the verification suite
 
 - **WHEN** the verification suite runs
-- **THEN** it reports a passing check that the bash history, Claude Code config, npm cache, and uv cache mounts are backed by volumes carrying the name derived from this container's workspace path
+- **THEN** it reports a passing check that the bash history, npm cache, and uv cache mounts, and every installed tool's state mounts, are backed by volumes carrying the name derived from this container's workspace path
 
 #### Scenario: A missing workspace name fails verification
 
@@ -71,3 +72,27 @@ Verification SHALL assert, whenever the verification suite runs, that each of th
 - **WHEN** the mounted volumes' names do not carry the component derived from this container's workspace path - because the derivation on the host and the one used to check it have drifted apart, or the container was started against another workspace's volumes
 - **THEN** verification reports a failure naming both the expected and the mounted volume
 - **AND** verification fails rather than passing silently when the mounted volume names cannot be determined at all
+
+#### Scenario: An installed tool's state is not on a volume
+
+- **WHEN** a tool installed in the image has a declared state directory that is not backed by a named volume
+- **THEN** verification reports a failure naming the tool and the directory
+
+### Requirement: The container carries the same name
+
+The sandbox container SHALL be named `sbx-` followed by the workspace-path component used for the volumes, so that `docker ps` shows which project each container serves. The name is a label only: isolation still rests on the volumes' uniqueness key. When two workspace paths derive the same component and one project's container already exists, the launch SHALL fail and name the existing container rather than reuse or replace it.
+
+#### Scenario: The container is identifiable after launch
+
+- **WHEN** a sandbox launch completes for workspace `/home/<user>/tools/sandbox`
+- **THEN** `docker ps` lists its container as `sbx-home-<user>-tools-sandbox`
+
+#### Scenario: Recreating keeps the name
+
+- **WHEN** `sbx` recreates the container after a config change or `--rebuild`
+- **THEN** the new container has the same name, and the project has exactly one container
+
+#### Scenario: Two paths that derive the same name
+
+- **WHEN** `/home/<user>/a b` already has a container and the sandbox is launched in `/home/<user>/a-b`
+- **THEN** the launch fails and names `sbx-home-<user>-a-b` as the existing container, and the other project's container keeps running

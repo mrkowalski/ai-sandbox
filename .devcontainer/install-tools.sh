@@ -62,7 +62,8 @@ case "$mode" in
     # still empty here, so it contributes nothing.
     IFS=: read -r -a dirs <<<"$PATH"
     for d in "${dirs[@]}"; do
-      [ -d "$d" ] && find "$d" -maxdepth 1 \( -type f -o -type l \) -printf '%f\n'
+      [ -d "$d" ] || continue
+      find "$d" -maxdepth 1 \( -type f -o -type l \) -printf '%f\n'
     done | sort -u > "$BASE_COMMANDS"
     ;;
 

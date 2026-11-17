@@ -13,7 +13,7 @@ A Docker dev container that restricts a coding agent (Claude Code, opencode, ...
 
 ### Base vs config
 
-Anything that only restricts the sandbox, or is harmless on its own, is baked into the base image and cannot be configured: the firewall, the read-only rootfs and `.git`, the host-only guard, git, gh, node/npm, uv/python, openspec. Anything that widens what the sandbox can reach is config: which tools are installed, which hosts it can reach, whether it can reach the Docker host, and which extra host folders it sees.
+Anything that only restricts the sandbox, or is harmless on its own, is baked into the base image and cannot be configured: the firewall, the read-only rootfs and `.git`, the host-only guard, git, gh, node/npm, uv/python. Anything that widens what the sandbox can reach is config: which tools are installed, which hosts it can reach, whether it can reach the Docker host, and which extra host folders it sees.
 
 ## Setup
 
@@ -80,6 +80,8 @@ The first time `sbx` sees a project's `.sbx/config`, and whenever its content ch
 ## Tool bundles
 
 Each tool is one directory under `.devcontainer/tools/<name>/`, enabled as a unit by `tools`. A project's image contains only the tools its config enables; images are tagged `sbx-img:<content hash>` and shared by projects with the same tools. Bundles come only from this repo.
+
+Shipped bundles: `claude`, `claude-opus-5-medium` (a wrapper; needs `claude`), `opencode`, and `openspec` (the OpenSpec CLI, telemetry off, no hosts of its own).
 
 | File | Purpose |
 |---|---|
@@ -168,4 +170,4 @@ docker images | grep '^sbx-'                        # per-project tags
 
 ### OpenSpec maintenance
 
-Run `openspec update` after bumping the npm package. It regenerates `.claude/skills`.
+OpenSpec is the `openspec` bundle; this repo's `.sbx/config` enables it. Its skills and commands are installed globally on the host (`~/.claude`), not in this repo, so after bumping the npm package run `openspec update` on the host. Inside the sandbox `~/.claude` is a per-project volume, so the agent there does not see them.

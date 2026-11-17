@@ -29,8 +29,10 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   && update-ca-certificates && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# Ensure default node user has access to /usr/local/share
-RUN mkdir -p /usr/local/share/npm-global && \
+# Ensure default node user has access to /usr/local/share. The npm prefix's bin
+# and node_modules exist even when no bundle installs into them, so the PATH
+# snapshot and verify.sh see the same layout with or without tools.
+RUN mkdir -p /usr/local/share/npm-global/bin /usr/local/share/npm-global/lib/node_modules && \
   chown -R node:node /usr/local/share
 
 ARG USERNAME=node
@@ -62,11 +64,6 @@ ENV PATH=/usr/local/share/sbx/bin:$PATH:/usr/local/share/npm-global/bin
 
 ENV EDITOR=vim
 ENV VISUAL=vim
-
-# OpenSpec telemetry
-ENV OPENSPEC_TELEMETRY=0
-
-RUN npm install -g @fission-ai/openspec@latest
 
 COPY init-firewall.sh /usr/local/bin/
 COPY entrypoint.sh /usr/local/bin/
