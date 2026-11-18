@@ -1,0 +1,3 @@
+tools = opencode
+allow = api.anthropic.com
+
