@@ -81,7 +81,7 @@ The first time `sbx` sees a project's `.sbx/config`, and whenever its content ch
 
 Each tool is one directory under `.devcontainer/tools/<name>/`, enabled as a unit by `tools`. A project's image contains only the tools its config enables; images are tagged `sbx-img:<content hash>` and shared by projects with the same tools. Bundles come only from this repo.
 
-Shipped bundles: `claude`, `claude-opus-5-medium` (a wrapper; needs `claude`), `opencode`, and `openspec` (the OpenSpec CLI, telemetry off, no hosts of its own).
+Shipped bundles: `claude`, `claude-opus-5-medium` (a wrapper; needs `claude`), `opencode` (v1, `opencode-ai`), `opencode2` (v2, `@opencode/cli`, run as `opencode2`; cannot be enabled together with `opencode`, since both keep state at the same paths), and `openspec` (the OpenSpec CLI, telemetry off, no hosts of its own).
 
 | File | Purpose |
 |---|---|
@@ -91,6 +91,7 @@ Shipped bundles: `claude`, `claude-opus-5-medium` (a wrapper; needs `claude`), `
 | `bin/` | optional scripts, first on `PATH`: helpers, or a wrapper with the same name as the tool's binary that `exec`s it with extra arguments. Wrappers are how a bundle aliases a command, since `sbx <cmd>` and ACP run no interactive shell. A script may not shadow a base command or another bundle's script; the build fails |
 | `shell.sh` | optional aliases and functions for interactive shells (`sbx bash`) only |
 | `allowed-domains.txt` | hostnames and public IPv4 ranges the tool requires whatever the project's configuration; not a model provider the user chooses, which the project adds with `allow` |
+| `verify.sh` | the bundle's own start-time checks, run by the base `verify.sh` as `node`. Sources `/usr/local/lib/sbx/verify-lib.sh`, reports with `ok`/`bad`/`warn`/`info`, and ends with `verify_finish`; a script that crashes, hangs or never finishes fails the launch. Required for an agent (it is where the host-only guard wiring is checked), optional otherwise |
 
 `tool.conf` keys:
 
@@ -124,7 +125,7 @@ docker run --rm -it --entrypoint /bin/bash <image>   # no firewall installed
 
 ## Commands that must run outside the sandbox
 
-Some commands cannot work in the sandbox due to credentials, APIs, etc. `.devcontainer/host-only-commands.txt` is the list of those commands. One matcher, `host-only-check`, applies it for every agent that has a pre-execution hook: Claude Code's `PreToolUse` hook and opencode's guard plugin.
+Some commands cannot work in the sandbox due to credentials, APIs, etc. `.devcontainer/host-only-commands.txt` is the list of those commands. One matcher, `host-only-check`, applies it for every agent that has a pre-execution hook: Claude Code's `PreToolUse` hook and opencode's guard plugin (one per major version: v2 has a different plugin API).
 
 To add one, add a line to `.devcontainer/host-only-commands.txt` and rebuild:
 

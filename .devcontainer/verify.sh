@@ -42,9 +42,9 @@
 # and that the sandbox tells the agent which commands cannot work in here,
 # rather than leaving it to find out by running them:
 #
-#   9. The host-only command list is installed, the shared matcher blocks a
-#      declared command and passes an ordinary one, and each installed agent's
-#      guard adapter is wired to it
+#   9. The host-only command list is installed, and the shared matcher
+#      blocks a declared command and passes an ordinary one (each agent's
+#      adapter is wired to it: check 15)
 #
 # and that the mounted project's git history is the host's to write, not the
 # agent's:
@@ -68,6 +68,12 @@
 #  14. The workspace's .sbx (when present) and /usr/local/etc/sbx are
 #      read-only, and the policy is a host bind outside the workspace
 #
+# and that each installed bundle is in the state it claims:
+#
+#  15. Each installed bundle's own tools/<name>/verify.sh runs to completion
+#      and passes; an agent bundle without one fails, since an agent's
+#      host-only guard wiring is checked only there
+#
 # Prints "VERIFIED" and exits 0 when every required check passes, otherwise
 # prints a summary of the failures and exits 1.
 #
@@ -82,26 +88,20 @@ export LC_ALL=C
 
 CONNECT_TIMEOUT=5
 MAX_TIME=15
-
-PASS=0
-FAIL=0
-WARN=0
-FAILED_CHECKS=()
+BUNDLE_TIMEOUT=60
 
 # ---------------------------------------------------------------- output ----
+#
+# Counters, ok/bad/warn/info/section and the child trailer live in the lib so
+# bundle checks (check 15) report exactly like the base. A missing lib stops
+# here, before any check: the entrypoint gate then fails and the container
+# stops, which is the fail-closed outcome.
 
-if [ -n "${VERIFY_FORCE_COLOR:-}" ] || { [ -t 1 ] && [ "$(tput colors 2>/dev/null || echo 0)" -ge 8 ]; }; then
-  C_G=$'\033[32m'; C_R=$'\033[31m'; C_Y=$'\033[33m'
-  C_C=$'\033[36m'; C_B=$'\033[1m';  C_0=$'\033[0m'
-else
-  C_G=""; C_R=""; C_Y=""; C_C=""; C_B=""; C_0=""
+VERIFY_LIB=/usr/local/lib/sbx/verify-lib.sh
+if ! . "$VERIFY_LIB" 2>/dev/null; then
+  printf 'verify.sh: cannot load %s - NOT VERIFIED\n' "$VERIFY_LIB" >&2
+  exit 1
 fi
-
-section() { printf '\n%s%s== %s ==%s\n' "$C_B" "$C_C" "$1" "$C_0"; }
-ok()      { printf '  %s[ PASS ]%s %s\n' "$C_G" "$C_0" "$1"; PASS=$((PASS + 1)); }
-warn()    { printf '  %s[ WARN ]%s %s\n' "$C_Y" "$C_0" "$1"; WARN=$((WARN + 1)); }
-bad()     { printf '  %s[ FAIL ]%s %s\n' "$C_R" "$C_0" "$1"; FAIL=$((FAIL + 1)); FAILED_CHECKS+=("$1"); }
-info()    { printf '           %s\n' "$1"; }
 
 # ------------------------------------------------------------ privileges ----
 #
@@ -378,10 +378,7 @@ check_iptables() {
 # trailer so the parent process can fold the results into its own summary.
 if [ "${1:-}" = "--iptables-only" ]; then
   check_iptables
-  for c in ${FAILED_CHECKS+"${FAILED_CHECKS[@]}"}; do printf '__VERIFY_FAILED__ %s\n' "$c"; done
-  printf '__VERIFY_COUNTS__ %d %d %d\n' "$PASS" "$FAIL" "$WARN"
-  [ "$FAIL" -eq 0 ]
-  exit $?
+  verify_finish
 fi
 
 # ============================================================================
@@ -573,14 +570,7 @@ else
   IPT_OUT=$(VERIFY_FORCE_COLOR="${C_B:+1}" sudo -n "$SELF" --iptables-only 2>&1)
   IPT_RC=$?
 
-  if grep -q '^__VERIFY_COUNTS__ ' <<<"$IPT_OUT"; then
-    printf '%s\n' "$IPT_OUT" | grep -v '^__VERIFY_'
-    read -r _ p f w < <(grep '^__VERIFY_COUNTS__ ' <<<"$IPT_OUT")
-    PASS=$((PASS + p)); FAIL=$((FAIL + f)); WARN=$((WARN + w))
-    while IFS= read -r line; do
-      FAILED_CHECKS+=("${line#__VERIFY_FAILED__ }")
-    done < <(grep '^__VERIFY_FAILED__ ' <<<"$IPT_OUT")
-  else
+  if ! verify_merge "$IPT_OUT"; then
     # No counts trailer means the check never actually ran: sudo refused, or
     # /usr/local/bin/verify.sh is a stale copy of this script. Fail loudly.
     section "iptables whitelist mode"
@@ -982,9 +972,7 @@ check_ro_dir "$HOME" "\$HOME (the named volumes mount inside it)"
 
 section "Host-only command guard"
 
-HOST_ONLY_LIST=/usr/local/etc/host-only-commands.txt
-HOST_ONLY_CHECK=/usr/local/bin/host-only-check
-HOST_ONLY_POLICY=/etc/sbx/sandbox-policy.md
+# HOST_ONLY_LIST, HOST_ONLY_CHECK and HOST_ONLY_POLICY come from the lib.
 
 # The commands the shipped list is expected to declare host-only - one per
 # family, so dropping a whole family from the list fails the launch instead of
@@ -1105,62 +1093,8 @@ else
   info "skipping the behavioural probes - the matcher is not installed correctly"
 fi
 
-# Each installed agent's adapter. A correct matcher that nothing invokes is the
-# quietest possible way for the guard to be broken. Tools this script knows no
-# adapter for get the policy text only, which check 12 does not cover.
-for t in "${INSTALLED_TOOLS[@]}"; do
-  case "$t" in
-    claude)
-      CC_SETTINGS=/etc/claude-code/managed-settings.json
-      CC_GUARD=/etc/claude-code/host-only-guard.sh
-      if [ -r "$CC_SETTINGS" ] && grep -qF "$CC_GUARD" "$CC_SETTINGS"; then
-        ok "claude: managed settings register $CC_GUARD as a PreToolUse hook"
-      else
-        bad "claude: $CC_SETTINGS does not reference $CC_GUARD - the guard would never run"
-      fi
-      if [ "$(jq -r '.permissions.defaultMode // ""' "$CC_SETTINGS" 2>/dev/null)" = bypassPermissions ] &&
-         [ "$(jq -r '.skipDangerousModePermissionPrompt // false' "$CC_SETTINGS" 2>/dev/null)" = true ]; then
-        ok "claude: managed settings bypass permissions with no confirmation prompt"
-      else
-        bad "claude: managed settings do not set defaultMode bypassPermissions and skipDangerousModePermissionPrompt"
-      fi
-      if cmp -s /etc/claude-code/CLAUDE.md "$HOST_ONLY_POLICY"; then
-        ok "claude: /etc/claude-code/CLAUDE.md is the sandbox policy"
-      else
-        bad "claude: /etc/claude-code/CLAUDE.md is missing or differs from $HOST_ONLY_POLICY"
-      fi
-      for cmd in 'git commit -m x' 'git status'; do
-        want=$([ "$cmd" = 'git status' ] && echo 0 || echo 2)
-        out=$(jq -n --arg c "$cmd" '{tool_name:"Bash",tool_input:{command:$c}}' | "$CC_GUARD" 2>&1)
-        rc=$?
-        if [ "$rc" -eq "$want" ]; then
-          ok "claude: hook adapter exits $rc for '$cmd'"
-        else
-          bad "claude: hook adapter exited $rc for '$cmd', expected $want"
-          [ -n "$out" ] && info "$(head -n 1 <<<"$out")"
-        fi
-      done
-      ;;
-    opencode)
-      OC_DIR=/etc/sbx/opencode
-      if [ "${OPENCODE_CONFIG_DIR:-}" = "$OC_DIR" ]; then
-        ok "opencode: OPENCODE_CONFIG_DIR is $OC_DIR"
-      else
-        bad "opencode: OPENCODE_CONFIG_DIR is '${OPENCODE_CONFIG_DIR:-unset}', expected $OC_DIR - its policy and guard are not loaded"
-      fi
-      if jq -e --arg p "$HOST_ONLY_POLICY" '.instructions | index($p)' "$OC_DIR/opencode.json" >/dev/null 2>&1; then
-        ok "opencode: opencode.json loads the sandbox policy"
-      else
-        bad "opencode: $OC_DIR/opencode.json does not list $HOST_ONLY_POLICY in instructions"
-      fi
-      if grep -qF "$HOST_ONLY_CHECK" "$OC_DIR/plugin/host-only-guard.js" 2>/dev/null; then
-        ok "opencode: guard plugin is installed and calls $HOST_ONLY_CHECK"
-      else
-        bad "opencode: $OC_DIR/plugin/host-only-guard.js is missing or does not call $HOST_ONLY_CHECK"
-      fi
-      ;;
-  esac
-done
+# Each installed agent's adapter is a bundle check (check 15): the bundle that
+# ships an adapter is the one that knows how its agent loads it.
 
 # ---------------------------------------------------------------------------
 # Check 10: the mounted repository cannot be written
@@ -1409,6 +1343,43 @@ else
   bad "$SBX_ETC is not a mount - the firewall policy did not come from the launcher"
 fi
 
+# ---------------------------------------------------------------------------
+# Check 15: each installed bundle's own checks
+# ---------------------------------------------------------------------------
+#
+# What only a bundle knows - how its agent loads the host-only guard, where its
+# baked config lives - is checked by the bundle's tools/<name>/verify.sh, so
+# adding a tool needs no edit here. Each runs as a child process: it can add
+# results but cannot touch this script's counters. Its results count only
+# through the lib's trailer, which verify_finish prints as its last act, so a
+# script that crashes, hangs, or forgets to finish is a FAIL, never a silent
+# pass. An agent with no script is a FAIL too: for an agent, the script is
+# where its guard wiring is asserted.
+
+for t in "${INSTALLED_TOOLS[@]}"; do
+  script="$SBX_SHARE/tools/$t/verify.sh"
+  if [ ! -f "$script" ]; then
+    if [ "$(conf_values "$(tool_conf "$t")" type | head -n 1)" = agent ]; then
+      section "$t bundle checks"
+      bad "$t: agent bundle ships no verify.sh - its host-only guard wiring is unchecked"
+    fi
+    continue
+  fi
+  section "$t bundle checks"
+  BUNDLE_OUT=$(cd / && VERIFY_FORCE_COLOR="${C_B:+1}" SBX_TOOL="$t" \
+    timeout "$BUNDLE_TIMEOUT" bash "$script" 2>&1)
+  BUNDLE_RC=$?
+  if ! verify_merge "$BUNDLE_OUT"; then
+    [ -n "$BUNDLE_OUT" ] && printf '%s\n' "$BUNDLE_OUT" | tail -n 5 | while IFS= read -r l; do info "$l"; done
+    if [ "$BUNDLE_RC" -eq 124 ]; then
+      bad "$t: verify.sh timed out after ${BUNDLE_TIMEOUT}s"
+    else
+      bad "$t: verify.sh did not finish (exit $BUNDLE_RC, no valid result trailer)"
+    fi
+  elif [ "$BUNDLE_RC" -ne 0 ] && ! grep -q '^__VERIFY_FAILED__ ' <<<"$BUNDLE_OUT"; then
+    bad "$t: verify.sh exited $BUNDLE_RC but reported no failure"
+  fi
+done
 
 # ---------------------------------------------------------------------------
 # Summary

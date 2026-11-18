@@ -68,6 +68,7 @@ ENV VISUAL=vim
 COPY init-firewall.sh /usr/local/bin/
 COPY entrypoint.sh /usr/local/bin/
 COPY verify.sh /usr/local/bin/
+COPY verify-lib.sh /usr/local/lib/sbx/verify-lib.sh
 COPY host-only-check /usr/local/bin/
 COPY host-only-commands.txt /usr/local/etc/
 
@@ -116,6 +117,7 @@ RUN echo 'export PATH="/usr/local/share/sbx/bin:$PATH:/usr/local/share/npm-globa
     chmod +x /usr/local/bin/init-firewall.sh && \
     chmod +x /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/verify.sh && \
+    chmod 0644 /usr/local/lib/sbx/verify-lib.sh && \
     echo "node ALL=(root) NOPASSWD: /usr/local/bin/init-firewall.sh" > /etc/sudoers.d/node-firewall && \
     echo "node ALL=(root) NOPASSWD: /usr/local/bin/verify.sh" > /etc/sudoers.d/verify && \
     chmod 0440 /etc/sudoers.d/node-firewall && \
