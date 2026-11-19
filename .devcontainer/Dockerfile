@@ -29,6 +29,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
   ca-certificates \
   && update-ca-certificates && apt-get clean && rm -rf /var/lib/apt/lists/*
 
+RUN npm install -g npm@latest && npm cache clean --force
+
 # Ensure default node user has access to /usr/local/share. The npm prefix's bin
 # and node_modules exist even when no bundle installs into them, so the PATH
 # snapshot and verify.sh see the same layout with or without tools.
