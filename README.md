@@ -149,8 +149,7 @@ Everything for one project carries a slug of its path: the absolute path with th
 
 ```
 sbx-home-marcin-tools-sandbox                                   # container
-sbx-bashhistory-home-marcin-tools-sandbox-<devcontainerId>      # base volumes
-sbx-npm-home-marcin-tools-sandbox-<devcontainerId>
+sbx-npm-home-marcin-tools-sandbox-<devcontainerId>              # base volumes
 sbx-uv-home-marcin-tools-sandbox-<devcontainerId>
 sbx-claude-config-home-marcin-tools-sandbox-<devcontainerId>    # one per tool volume
 sbx-home-marcin-tools-sandbox:latest                            # image tag, next to sbx-img:<hash>

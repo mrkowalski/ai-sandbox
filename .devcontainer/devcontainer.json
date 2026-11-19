@@ -12,7 +12,6 @@
   "remoteUser": "node",
   "initializeCommand": "mkdir -p '${localWorkspaceFolder}/.git'",
   "mounts": [
-    "source=sbx-bashhistory-${localEnv:SBX_SLUG}-${devcontainerId},target=/commandhistory,type=volume",
     "source=sbx-npm-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.npm,type=volume",
     "source=sbx-uv-${localEnv:SBX_SLUG}-${devcontainerId},target=/home/node/.cache/uv,type=volume",
     "source=${localWorkspaceFolder}/.git,target=${localWorkspaceFolder}/.git,type=bind,readonly"

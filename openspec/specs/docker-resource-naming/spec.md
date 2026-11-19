@@ -15,7 +15,8 @@ Every volume name SHALL begin with `sbx-`, followed by the tool name for a tool'
 #### Scenario: A volume is attributable to its project
 
 - **WHEN** an operator lists Docker volumes on the host after launching the sandbox in `/home/<user>/tools/sandbox` with `tools = claude opencode`
-- **THEN** the base volumes begin `sbx-bashhistory-home-<user>-tools-sandbox`, `sbx-npm-home-<user>-tools-sandbox`, and `sbx-uv-home-<user>-tools-sandbox`
+- **THEN** the base volumes begin `sbx-npm-home-<user>-tools-sandbox` and `sbx-uv-home-<user>-tools-sandbox`
+- **AND** no bash history volume is created for the project
 - **AND** the tool volumes begin `sbx-claude-config-home-<user>-tools-sandbox` for Claude Code and `sbx-opencode-<kind>-home-<user>-tools-sandbox` for each state directory opencode declares
 - **AND** filtering the listing on `home-<user>-tools-sandbox` returns that project's volumes and no others
 
@@ -31,7 +32,7 @@ Volume names SHALL also contain a uniqueness key supplied by the dev container t
 #### Scenario: Two projects do not share volumes
 
 - **WHEN** the sandbox is launched in two different workspace folders
-- **THEN** each launch mounts its own base and tool volumes, and neither project's tool credentials, session history, bash history, npm cache, or uv cache are visible to the other
+- **THEN** each launch mounts its own base and tool volumes, and neither project's tool credentials, session history, npm cache, or uv cache are visible to the other
 
 #### Scenario: A launcher that does not supply the workspace name
 
@@ -60,7 +61,7 @@ Verification SHALL assert, whenever the verification suite runs, that each mount
 #### Scenario: The naming is checked by the verification suite
 
 - **WHEN** the verification suite runs
-- **THEN** it reports a passing check that the bash history, npm cache, and uv cache mounts, and every installed tool's state mounts, are backed by volumes carrying the name derived from this container's workspace path
+- **THEN** it reports a passing check that the npm cache and uv cache mounts, and every installed tool's state mounts, are backed by volumes carrying the name derived from this container's workspace path
 
 #### Scenario: A missing workspace name fails verification
 

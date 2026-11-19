@@ -227,7 +227,7 @@ _sbx_under() { [ "$1" = "$2" ] || [[ "$1" == "$2"/* ]]; }
 
 # Container paths a host mount may not cover, contain, or sit inside: the
 # image's own machinery and the mounts the sandbox's guarantees rest on.
-_SBX_SYSTEM_PATHS=(/bin /boot /commandhistory /dev /etc /home/node /lib /lib32
+_SBX_SYSTEM_PATHS=(/bin /boot /dev /etc /home/node /lib /lib32
                    /lib64 /libx32 /proc /root /run /sbin /sys /tmp /usr /var /workspace)
 
 # _sbx_check_mount <value> <workspace> - sets _SBX_MOUNT ("<resolved>|ro|rw")

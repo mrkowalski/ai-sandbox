@@ -13,7 +13,7 @@ If a part only restricts the sandbox, or is harmless on its own, it is baked int
 | No credentials, host-only list and shared matcher, sandbox policy text | base | restricts |
 | `NET_ADMIN`/`NET_RAW`, the two sudoers entries | base | needed to install the firewall; node cannot use them beyond the two scripts, which only read read-only policy |
 | git, gh, node/npm, uv/python, jq | base | harmless without egress or credentials |
-| npm, uv, and bash-history volumes | base | per project, no new reach |
+| npm and uv volumes | base | per project, no new reach |
 | `BROWSER` handler (`sbx-browser`) | base | harmless: prints the URL, opens nothing |
 | Egress hostnames and public IPv4 ranges | config `allow`/`deny` | every entry is an exfiltration path |
 | Tools (bundles) | config `tools` | reach comes through their hosts and stored credentials |
@@ -30,7 +30,7 @@ The enforcement files below are listed with what each guarantees; a change to an
 - Makes the rootfs `--read-only`, with a `noexec` `/tmp` tmpfs.
 - Bind-mounts the project at its host path, then binds its `.git` back over itself **read-only**. This is the only thing stopping the agent writing the user's history. It applies to every process, whatever invoked it, and the guard's bypass does not affect it. Staging (`git add`, `stash`, `checkout -b`) fails too, by design; reads still work. `initializeCommand` pre-creates `.git` so a workspace with no repository does not end up with a root-owned one. Repos outside the workspace stay writable, and `verify.sh`'s scratch repo relies on that.
 - Pins `"overrideCommand": false`. Otherwise the CLI starts the container with `--entrypoint /bin/sh` and the firewall is never installed. This line, the image `ENTRYPOINT`, and the Dockerfile's keep-alive `CMD` only work together: remove any one and enforcement quietly stops happening.
-- Base named volumes `sbx-<kind>-${localEnv:SBX_SLUG}-${devcontainerId}` for bash history, npm cache, and uv cache. `${devcontainerId}` is the uniqueness key and must stay; without it, projects would share tool credentials. The slug is only a readable label, and a launch without `SBX_SLUG` creates a stray `sbx-<kind>--<id>` set.
+- Base named volumes `sbx-<kind>-${localEnv:SBX_SLUG}-${devcontainerId}` for npm cache and uv cache. `${devcontainerId}` is the uniqueness key and must stay; without it, projects would share tool credentials. The slug is only a readable label, and a launch without `SBX_SLUG` creates a stray `sbx-<kind>--<id>` set.
 - npm's cache at `/home/node/.npm` is a volume because on the read-only rootfs npm fails with `EROFS`. It cannot be a tmpfs because `npx` executes from the cache and tmpfs is `noexec`.
 - uv's cache at `/home/node/.cache/uv` is a volume for the same two reasons: `uv run` and `uvx` build environments in it and exec from them. Interpreters are baked into `/usr/local/share/uv/python` (read-only) and `UV_PYTHON_DOWNLOADS=never`, since their download host, GitHub, is blocked.
 - `postStartCommand` (with `waitFor`) waits up to 120s for the entrypoint marker, then runs the full `verify.sh`. It never touches the firewall: the entrypoint is its only installer. **It is not enforcement**: it doesn't run on `docker start` or restarts, and a failure there doesn't stop an already-running container.

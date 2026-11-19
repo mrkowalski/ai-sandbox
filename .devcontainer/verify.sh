@@ -837,7 +837,6 @@ else
 
   # tool|kind|mountpoint - the base volumes, then each installed tool's.
   VOLUME_SPECS=(
-    "|bashhistory|/commandhistory"
     "|npm|/home/node/.npm"
     "|uv|/home/node/.cache/uv"
   )

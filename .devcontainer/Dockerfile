@@ -39,12 +39,9 @@ RUN mkdir -p /usr/local/share/npm-global/bin /usr/local/share/npm-global/lib/nod
 
 ARG USERNAME=node
 
-# Persist bash history.
-RUN SNIPPET="export PROMPT_COMMAND='history -a' && export HISTFILE=/commandhistory/.bash_history" \
-  && mkdir /commandhistory \
-  && touch /commandhistory/.bash_history \
-  && chown -R $USERNAME /commandhistory \
-  && echo "$SNIPPET" >> /home/$USERNAME/.bashrc \
+# In-memory history only: the rootfs is read-only, so writing ~/.bash_history
+# would fail on every shell exit.
+RUN echo 'unset HISTFILE' >> /home/$USERNAME/.bashrc \
   && chown $USERNAME:$USERNAME /home/$USERNAME/.bashrc
 
 # Set `DEVCONTAINER` environment variable to help with orientation
