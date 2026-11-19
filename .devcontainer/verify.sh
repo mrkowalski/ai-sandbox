@@ -74,6 +74,11 @@
 #      and passes; an agent bundle without one fails, since an agent's
 #      host-only guard wiring is checked only there
 #
+# and that tools which open a URL have somewhere harmless to send it:
+#
+#  16. $BROWSER is set, resolves to an executable in a read-only dir, and
+#      returns 0 promptly when handed a URL
+#
 # Prints "VERIFIED" and exits 0 when every required check passes, otherwise
 # prints a summary of the failures and exits 1.
 #
@@ -1380,6 +1385,45 @@ for t in "${INSTALLED_TOOLS[@]}"; do
     bad "$t: verify.sh exited $BUNDLE_RC but reported no failure"
   fi
 done
+
+# ---------------------------------------------------------------------------
+# Check 16: BROWSER points at a harmless handler
+# ---------------------------------------------------------------------------
+#
+# There is no display or browser. Without $BROWSER, tools fall back to
+# xdg-open and friends, which are absent, and report a failure; with a handler
+# that hangs, a login can stall. The value is not pinned to sbx-browser: a
+# bundle may override it through tool.conf `env`, and any read-only handler
+# that returns promptly is acceptable. Python's webbrowser treats $BROWSER as
+# an os.pathsep list and substitutes %s, so only the first entry's first word
+# is resolved here.
+
+section "BROWSER must be a harmless handler"
+
+if [ -z "${BROWSER:-}" ]; then
+  bad "BROWSER is not set - tools try to launch a browser that does not exist"
+else
+  BROWSER_CMD="${BROWSER%%:*}"
+  BROWSER_CMD="${BROWSER_CMD%% *}"
+  if ! BROWSER_PATH=$(type -P "$BROWSER_CMD"); then
+    bad "BROWSER is '$BROWSER', but '$BROWSER_CMD' is not an executable on PATH"
+  else
+    BROWSER_REAL=$(readlink -f "$BROWSER_PATH")
+    probe="$(dirname "$BROWSER_REAL")/.verify-ro-probe.$$"
+    if ( : > "$probe" ) 2>/dev/null; then
+      rm -f "$probe"
+      bad "BROWSER handler $BROWSER_REAL is in a WRITABLE dir"
+    else
+      ok "BROWSER handler $BROWSER_PATH is in a read-only dir"
+    fi
+    if (cd / && timeout 5 "$BROWSER_PATH" "https://example.invalid/verify" </dev/null >/dev/null 2>&1); then
+      ok "BROWSER handler returns 0 when handed a URL"
+    else
+      bad "BROWSER handler failed or hung when handed a URL"
+    fi
+    [ "$BROWSER_REAL" = /usr/local/bin/sbx-browser ] || info "BROWSER overridden: $BROWSER"
+  fi
+fi
 
 # ---------------------------------------------------------------------------
 # Summary

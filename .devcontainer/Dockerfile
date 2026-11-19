@@ -65,6 +65,11 @@ ENV PATH=/usr/local/share/sbx/bin:$PATH:/usr/local/share/npm-global/bin
 ENV EDITOR=vim
 ENV VISUAL=vim
 
+# No display and no browser: tools that open a URL (logins, docs links) run
+# this instead, which prints the URL for the user to open on the host.
+ENV BROWSER=/usr/local/bin/sbx-browser
+
+COPY sbx-browser /usr/local/bin/
 COPY init-firewall.sh /usr/local/bin/
 COPY entrypoint.sh /usr/local/bin/
 COPY verify.sh /usr/local/bin/
@@ -114,6 +119,7 @@ RUN echo 'export PATH="/usr/local/share/sbx/bin:$PATH:/usr/local/share/npm-globa
     chmod 0644 /etc/sbx/sandbox-policy.md && \
     mkdir -p /usr/local/etc/sbx && \
     chmod +x /usr/local/bin/host-only-check && \
+    chmod +x /usr/local/bin/sbx-browser && \
     chmod +x /usr/local/bin/init-firewall.sh && \
     chmod +x /usr/local/bin/entrypoint.sh && \
     chmod +x /usr/local/bin/verify.sh && \

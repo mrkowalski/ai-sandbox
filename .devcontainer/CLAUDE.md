@@ -14,6 +14,7 @@ If a part only restricts the sandbox, or is harmless on its own, it is baked int
 | `NET_ADMIN`/`NET_RAW`, the two sudoers entries | base | needed to install the firewall; node cannot use them beyond the two scripts, which only read read-only policy |
 | git, gh, node/npm, uv/python, jq | base | harmless without egress or credentials |
 | npm, uv, and bash-history volumes | base | per project, no new reach |
+| `BROWSER` handler (`sbx-browser`) | base | harmless: prints the URL, opens nothing |
 | Egress hostnames and public IPv4 ranges | config `allow`/`deny` | every entry is an exfiltration path |
 | Tools (bundles) | config `tools` | reach comes through their hosts and stored credentials |
 | Docker-host /24 | config `host-network`, default off | reaches services on the host |
@@ -52,7 +53,7 @@ Saves Docker's `127.0.0.11` DNS NAT rules, sets all policies to DROP **before** 
 
 ## 5. `verify.sh`
 
-Checks the end state itself instead of trusting (4). Its expectations come from the image (`/usr/local/share/sbx/tools.list`, each bundle's `tool.conf`) and the policy mount, never from a list of its own. Its checks are numbered 1-15 in its header: egress blocked on a non-whitelisted probe host (including github.com unless allowed), `git push` impossible with no credentials, each tool's `probe` reachable, iptables in whitelist mode with the host /24 matching `HOST_NETWORK`, entrypoint marker present, npm and uv caches and each tool's `*TMPDIR` env target writable and exec-capable, volume names match this workspace, rootfs read-only, host-only matcher working, `.git` read-only but readable, `uv run` works offline, tool binaries and bundle scripts on `PATH` from read-only dirs, tool tmpfs writable and noexec, `.sbx` and the policy mount read-only, and each installed bundle's own `verify.sh` passing (15).
+Checks the end state itself instead of trusting (4). Its expectations come from the image (`/usr/local/share/sbx/tools.list`, each bundle's `tool.conf`) and the policy mount, never from a list of its own. Its checks are numbered 1-16 in its header: egress blocked on a non-whitelisted probe host (including github.com unless allowed), `git push` impossible with no credentials, each tool's `probe` reachable, iptables in whitelist mode with the host /24 matching `HOST_NETWORK`, entrypoint marker present, npm and uv caches and each tool's `*TMPDIR` env target writable and exec-capable, volume names match this workspace, rootfs read-only, host-only matcher working, `.git` read-only but readable, `uv run` works offline, tool binaries and bundle scripts on `PATH` from read-only dirs, tool tmpfs writable and noexec, `.sbx` and the policy mount read-only, each installed bundle's own `verify.sh` passing (15), and `$BROWSER` set to a read-only handler that returns 0 promptly (16).
 
 Output helpers, counters and the child trailer are in `verify-lib.sh` (baked at `/usr/local/lib/sbx/verify-lib.sh`), shared by `verify.sh` and the bundle checks. `verify.sh` refuses to run without it, so a missing lib fails the entrypoint gate and the container stops.
 

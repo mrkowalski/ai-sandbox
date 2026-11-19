@@ -1,0 +1,27 @@
+#!/bin/bash
+#
+# sbx-browser - the BROWSER handler for the headless sandbox.
+#
+# Guarantees:
+#   - never launches anything: the container has no display and no browser;
+#   - prints each URL it is given on stderr, so the user can open it on the
+#     host (an OAuth redirect to localhost cannot reach the container, so a
+#     login completes through the tool's paste-the-code path);
+#   - exits 0, so a tool treats the "open" as handled instead of reporting a
+#     failure.
+#
+# Invocation: set as $BROWSER in the image (Dockerfile ENV); tools call it as
+#   sbx-browser <url> [<url>...]
+
+set -euo pipefail
+
+if [ "$#" -eq 0 ]; then
+  printf 'sbx: no browser in the sandbox (no URL was given)\n' >&2
+  exit 0
+fi
+
+printf 'sbx: no browser in the sandbox; open on the host:\n' >&2
+for url in "$@"; do
+  printf '  %s\n' "$url" >&2
+done
+exit 0
